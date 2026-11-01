@@ -13,6 +13,7 @@ import struct
 import winreg
 from datetime import datetime
 from pathlib import Path
+from installer.windows_security import finalize_installer
 
 
 ROOT = Path(__file__).resolve().parent
@@ -153,6 +154,9 @@ def build_windows_installer(release: Path) -> Path:
     resource = build_dir / "launcher.res"
     launcher = release / "App" / "BlueBean.exe"
     installer = release / "BlueBean-Setup-Windows-x64.exe"
+    inno_output = build_dir / "inno-payload"
+    inno_output.mkdir(exist_ok=True)
+    installer_payload = inno_output / installer.name
 
     includes = sdk / "Include" / sdk_version
     subprocess.run([
@@ -173,6 +177,21 @@ def build_windows_installer(release: Path) -> Path:
         "kernel32.lib", "user32.lib",
     ], cwd=ROOT, check=True)
 
+    permission_obj = build_dir / "configure-permissions.obj"
+    permission_helper = build_dir / "BlueBean-Permissions.exe"
+    subprocess.run([
+        str(llvm / "clang-cl.exe"), "/nologo", "/c", "/O2", "/W0", "/GS-", "/Zl",
+        "/DUNICODE", "/D_UNICODE", f"/I{includes / 'um'}", f"/I{includes / 'shared'}",
+        f"/Fo{permission_obj}", str(ROOT / "installer" / "configure_permissions.cpp"),
+    ], cwd=ROOT, check=True)
+    subprocess.run([
+        str(llvm / "lld-link.exe"), "/nologo", "/subsystem:windows",
+        "/entry:WinMainCRTStartup", "/nodefaultlib", "/machine:x64",
+        f"/out:{permission_helper}", str(permission_obj), str(resource),
+        f"/libpath:{sdk / 'Lib' / sdk_version / 'um' / 'x64'}",
+        "kernel32.lib", "shell32.lib", "advapi32.lib",
+    ], cwd=ROOT, check=True)
+
     compiler = Path(os.environ.get("BLUEBEAN_ISCC") or
                     ROOT / "build" / "tools" / "InnoSetup" / "ISCC.exe")
     if not compiler.is_file():
@@ -180,9 +199,10 @@ def build_windows_installer(release: Path) -> Path:
     print("Building the standard Windows installation wizard...", flush=True)
     with (release / "inno-build.log").open("wb") as log:
         subprocess.run([str(compiler), f"/DPayloadRoot={release / 'App'}",
-                        f"/DInstallerOutput={release}", str(ROOT / "installer" / "BlueBean.iss")],
+                        f"/DPermissionHelper={permission_helper}",
+                        f"/DInstallerOutput={inno_output}", str(ROOT / "installer" / "BlueBean.iss")],
                        cwd=ROOT, check=True, timeout=3600, stdout=log, stderr=subprocess.STDOUT)
-    if installer.stat().st_size < 1024 * 1024:
+    if installer_payload.stat().st_size < 1024 * 1024:
         raise RuntimeError("Windows setup executable is unexpectedly small")
     # Inno's loader needs TEMP before any Pascal installer code runs. A native
     # GUI bootstrap selects a private directory without changing global ACLs.
@@ -204,7 +224,7 @@ def build_windows_installer(release: Path) -> Path:
         "kernel32.lib", "user32.lib", "shell32.lib", "advapi32.lib", "bcrypt.lib",
     ], cwd=ROOT, check=True)
     wrapped = release / "BlueBean-Setup-Windows-x64.wrapped.exe"
-    with bootstrap.open("rb") as stub, installer.open("rb") as payload, wrapped.open("wb") as output:
+    with bootstrap.open("rb") as stub, installer_payload.open("rb") as payload, wrapped.open("wb") as output:
         shutil.copyfileobj(stub, output)
         offset = output.tell()
         digest = hashlib.sha256()
@@ -212,8 +232,9 @@ def build_windows_installer(release: Path) -> Path:
             digest.update(chunk)
             output.write(chunk)
         output.write(struct.pack("<16sQQ32s", b"BBSETUP_PAYLOAD1", offset,
-                                 installer.stat().st_size, digest.digest()))
+                                 installer_payload.stat().st_size, digest.digest()))
     wrapped.replace(installer)
+    finalize_installer(installer)
     print(f"Installer: {installer} ({installer.stat().st_size / (1024 ** 3):.2f} GiB)")
     return installer
 

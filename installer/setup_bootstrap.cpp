@@ -27,6 +27,19 @@ static void Error(const wchar_t* message) {
   if (!silent) MessageBoxW(nullptr, message, L"蓝豆指纹浏览器安装", MB_OK | MB_ICONERROR);
 }
 
+static bool HasNormalIntegrity() {
+  HANDLE token;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+  DWORD bytes = 0;
+  BOOL ok = GetTokenInformation(token, TokenIntegrityLevel, token_buffer,
+                               sizeof(token_buffer), &bytes);
+  CloseHandle(token);
+  if (!ok) return false;
+  PSID sid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(token_buffer)->Label.Sid;
+  DWORD level = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
+  return level >= SECURITY_MANDATORY_MEDIUM_RID;
+}
+
 static bool Append(wchar_t* target, const wchar_t* value) {
   if (lstrlenW(target) + lstrlenW(value) >= 32767) return false;
   lstrcatW(target, value);
@@ -176,6 +189,10 @@ extern "C" void WINAPI WinMainCRTStartup() {
   }
   DWORD n = GetModuleFileNameW(nullptr, self_path, 32768);
   if (!n || n >= 32768) ExitProcess(1);
+  if (!HasNormalIntegrity()) {
+    Error(L"Windows 将此安装程序限制为低权限，无法写入正常安装目录。\n请重新下载最新版安装包到“下载”文件夹后运行。无需修改系统文件夹权限。");
+    ExitProcess(13);
+  }
   if (!SelectTemp()) {
     Error(L"无法创建安全的安装临时目录。请将安装包复制到你可以写入的本地文件夹后重试。\n系统临时目录的权限不会被修改。");
     ExitProcess(10);

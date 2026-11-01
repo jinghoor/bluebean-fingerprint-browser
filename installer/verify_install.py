@@ -15,6 +15,9 @@ import shutil
 import struct
 import subprocess
 import time
+import winreg
+
+from windows_security import file_integrity, sandbox_read_access
 
 
 def file_hash(path: Path) -> str:
@@ -105,6 +108,7 @@ def main() -> None:
     parser.add_argument("--payload", required=True, type=Path)
     parser.add_argument("--data", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--require-uninstall-registration", action="store_true")
     args = parser.parse_args()
     app, payload, data = args.app.resolve(), args.payload.resolve(), args.data.resolve()
     assert app != data and not data.is_relative_to(app)
@@ -176,6 +180,28 @@ def main() -> None:
                           "print('workbench-ok' if r.get('ok') and plugins else 'workbench-failed')\nfinally:\n _dsh_web.stop()"],
         "workbench-ok", 240)
 
+    try:
+        labels = {str(path.relative_to(app)) if path != app else ".": file_integrity(path)
+                  for path in [app, app / "BlueBean.exe", app / "runtime/pythonw.exe",
+                               app / "browser/chrome.exe"]}
+        results["checks"]["installed_integrity"] = {
+            "passed": all(label >= 0x2000 for label in labels.values()),
+            "integrity_rids": labels,
+        }
+    except Exception as exc:
+        results["checks"]["installed_integrity"] = {
+            "passed": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    try:
+        access = {str(path.relative_to(app)) if path != app else ".": sandbox_read_access(path)
+                  for path in [app, app / "BlueBean.exe", app / "runtime/pythonw.exe",
+                               app / "browser/chrome.dll"]}
+        results["checks"]["sandbox_file_access"] = {
+            "passed": all(all(value.values()) for value in access.values()), "paths": access}
+    except Exception as exc:
+        results["checks"]["sandbox_file_access"] = {
+            "passed": False, "error": f"{type(exc).__name__}: {exc}"}
+
     # Test the real native EXE in a fixture, with a harmless pythonw entry point.
     # The actual application files remain untouched and no UI is opened.
     fixture = data / "launcher path with spaces"
@@ -205,6 +231,37 @@ def main() -> None:
         runtime_link.rmdir()  # Remove only the junction, never its target.
 
     (data / "user-data-must-survive.txt").write_text("keep user data", encoding="utf-8")
+    if args.require_uninstall_registration:
+        key = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{4F271ABA-D768-42B2-9A96-CE947AD56CBB}_is1"
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as registration:
+                install_location = winreg.QueryValueEx(registration, "InstallLocation")[0]
+            registered = Path(install_location).resolve() == app
+        except OSError:
+            registered = False
+        shortcut_probe = subprocess.run([
+            str(windows / "System32/WindowsPowerShell/v1.0/powershell.exe"),
+            "-NoProfile", "-NonInteractive", "-Command",
+            "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); "
+            "$w=New-Object -ComObject WScript.Shell; "
+            "$r=@(); foreach($f in @('Desktop','Programs')) { "
+            "$p=Join-Path ([Environment]::GetFolderPath($f)) '蓝豆指纹浏览器.lnk'; "
+            "if(Test-Path -LiteralPath $p) { $s=$w.CreateShortcut($p); "
+            "$r+=@{path=$p;target=$s.TargetPath;icon=$s.IconLocation} } }; "
+            "ConvertTo-Json -InputObject @($r) -Compress"], capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        shortcuts = json.loads(shortcut_probe.stdout) if shortcut_probe.returncode == 0 else []
+        shortcut = len(shortcuts) == 2 and all(
+            Path(link["target"]).resolve() == app / "BlueBean.exe"
+            and Path(link["icon"].rsplit(",", 1)[0]).resolve() == app / "landou-browser.ico"
+            for link in shortcuts)
+        results["checks"]["normal_install_registration"] = {
+            "passed": registered and shortcut,
+            "uninstall_registered": registered,
+            "shortcut_created": shortcut,
+            "shortcut_targets": shortcuts,
+        }
     results["passed"] = all(item["passed"] for item in results["checks"].values())
     args.report.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"passed": results["passed"], "checks": results["checks"]}, ensure_ascii=True))

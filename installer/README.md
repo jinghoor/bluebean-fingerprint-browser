@@ -34,6 +34,25 @@ API Key、Cookie 或个人环境。卸载程序不删除此数据目录。需要
 
 当前有效的安装器实现为 `BlueBean.iss`；不使用旧的 IExpress/PowerShell 安装草案。
 
+最终 Setup EXE 使用 Inno Setup 安装器前的原生临时目录引导程序，并将最终交付 EXE 的完整性级别设为 Medium。构建目录可能由受限构建环境创建为 Low Integrity；若不在最终产物上纠正此安全标签，Windows Explorer 启动时也会把安装器进程降到 Low Integrity，导致它无法写入正常的 per-user 安装位置。发布前应从 Explorer 的同级完整性运行安装验收，至少确认进程不是 Low Integrity。
+
+复制 EXE 到另一个本地交付文件夹后，该文件可能再次继承目标目录的 Low 标签。
+因此最后一次复制完成后必须执行，并按 SID 验证，不能只检查构建目录中的原件：
+
+```powershell
+python installer/windows_security.py "X:/delivery/BlueBean-Setup-Windows-x64.exe"
+```
+
+该操作只纠正指定安装 EXE 的完整性标签，不修改系统目录权限、不要求产品安装提权，
+也不改变 EXE 内容或 SHA-256。NTFS 安全标签不包含在上传的 EXE 字节中。
+启动层若发现自己仍在 Low Integrity 下运行，会在解压之前退出并给出明确提示
+（静默模式退出码 13），避免继续弹出误导性的 TEMP 或安装目录错误。
+
+安装收尾通过无控制台的原生 `BlueBean-Permissions.exe` 为当前安装目录补充浏览器
+沙箱所需的读取/执行权限。它保留原有 DACL，只合并 ALL APPLICATION PACKAGES 和
+ALL RESTRICTED APPLICATION PACKAGES 的继承项，不启动 `icacls` 或控制台宿主。
+配置失败时安装器返回 20；验收另行检查实际文件权限，不仅依赖安装器退出码。
+
 ## 无界面验收
 
 在独立目录安装并设置独立测试数据后运行：
@@ -47,8 +66,13 @@ python installer/verify_install.py --app "X:/test/App" --payload "X:/release/App
 到 pythonw 启动链路。它使用无界面浏览器，不打开产品窗口，不访问真实用户数据。
 原生启动链路在独立夹具中使用无害入口脚本，不把这一项当作完整图形界面验收。
 
-本机自动测试使用 `/ACCEPTANCETEST=1`，避免改动使用者的桌面和系统应用登记。
+隔离测试可使用 `/ACCEPTANCETEST=1`，避免改动使用者的桌面和系统应用登记。
 此参数仅跳过快捷方式、卸载注册表项创建，安装文件和沙箱权限流程照常执行。
 因此自动测试不等同于在全新电脑上完成完整安装向导、系统登记和 UI 验收。
+
+正常安装回归应另外在可恢复的测试条件下，不传入此参数，以默认安装目录运行，
+并传入 `--require-uninstall-registration` 验证安装登记和两个快捷方式的真实目标及图标。
+应先备份已有快捷方式，完成卸载后恢复。完整性检查直接查询 Windows SID，
+不依赖操作系统的中英文输出。运行时检查始终使用独立测试数据目录。
 
 最终交付目录中的测试报告记录具体检查结果和验证边界。
