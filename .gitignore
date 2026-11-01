@@ -1,0 +1,36 @@
+# Local profiles, credentials, logs and generated state
+.dsh-home/
+.dsh-sdk/
+.geo-cache/
+.pnpm-store/
+data/
+profiles/
+logs/
+*.log
+*.dmp
+*.pyc
+__pycache__/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+proxies.json
+proxies.expected.json
+chromium-src.json
+
+# Local Chromium checkout, build outputs and packaged runtimes
+chromium/
+out/
+build/
+dist/
+runtime/
+node_modules/
+
+# Editor / OS state
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

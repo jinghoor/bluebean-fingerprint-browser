@@ -1,0 +1,842 @@
+[
+  {
+    "name": "environment_catalog",
+    "action": "catalog",
+    "description": "查看我的环境API能力、平台目录、导入格式及风险规则，不操作浏览器。",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_list",
+    "action": "list",
+    "description": "查询本机环境配置与账号摘要，可筛选分页。不会打开浏览器或返回密码/2FA。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "按名称、编号、分组、标签搜索"
+        },
+        "env_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "环境准确编号；不能用模糊名称代替",
+            "maxLength": 64
+          },
+          "maxItems": 1000
+        },
+        "group": {
+          "type": "string",
+          "description": ""
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "include_accounts": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_get",
+    "action": "get",
+    "description": "读取一个环境的完整配置、revision及账号摘要，编辑前先读取。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_id": {
+          "type": "string",
+          "description": "环境准确编号；不能用模糊名称代替",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "env_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_status",
+    "action": "status",
+    "description": "查看运行、当前环境、网络与Agent操作状态，不激活环境。",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_fingerprint",
+    "action": "fingerprint",
+    "description": "读取单个环境的浏览器指纹信息：Windows/平台、Chromium内核、User-Agent、屏幕窗口、字体探测、语言时区、WebGL/GPU、硬件和代理出口落地信息。环境未运行时返回基于指纹种子的配置推算值；不读取或返回Cookie、密码、2FA或网站登录数据。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_id": {
+          "type": "string",
+          "description": "环境准确编号；不能用模糊名称代替",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "env_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_save",
+    "action": "save",
+    "description": "新建或编辑环境。新建可省略编号，自动生成独立指纹；新建同时添加账号用initial_accounts数组，一次调用完成。编辑必须提供env_id及当前revision。只写配置，不打开环境；账号部分失败会保留环境并返回逐项结果。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_id": {
+          "type": "string",
+          "description": "环境编号；新建时可省略，自动生成独立编号"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "环境名称"
+        },
+        "group": {
+          "type": "string",
+          "description": "分组"
+        },
+        "tags": {
+          "type": "string",
+          "description": "逗号分隔的标签"
+        },
+        "notes": {
+          "type": "string",
+          "description": "备注"
+        },
+        "proxy": {
+          "type": "string",
+          "description": "http(s)/socks4/socks5://主机:端口，或direct/system；当前不支持认证代理"
+        },
+        "expected_exit_ip": {
+          "type": "string",
+          "description": "预期出口IP（选填）"
+        },
+        "locale": {
+          "type": "string",
+          "description": "区域语言，例如zh-CN"
+        },
+        "accept_languages": {
+          "type": "string",
+          "description": "请求语言，例如zh-CN,zh"
+        },
+        "fingerprint_seed": {
+          "type": "string",
+          "description": "指纹种子；新建默认独立随机生成"
+        },
+        "start_url": {
+          "type": "string",
+          "description": "首次打开的完整http(s)网址"
+        },
+        "homepage": {
+          "type": "string",
+          "description": "新标签页完整http(s)网址"
+        },
+        "create_only": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "string",
+          "description": "编辑前由environment_get读取"
+        },
+        "initial_accounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "platform_id": {
+                "type": "string",
+                "description": "目录中的平台id，例如facebook、instagram、amazon或custom"
+              },
+              "platform": {
+                "type": "string",
+                "description": "自定义平台的显示名称"
+              },
+              "login": {
+                "type": "string",
+                "description": "登录账号"
+              },
+              "username": {
+                "type": "string",
+                "description": "用户名"
+              },
+              "url": {
+                "type": "string",
+                "description": "网站地址；默认使用平台目录地址"
+              },
+              "site": {
+                "type": "string",
+                "description": "站点名称"
+              },
+              "label": {
+                "type": "string",
+                "description": "备注"
+              },
+              "password": {
+                "type": "string",
+                "description": "密码；优先保存后用fill在本机填写，勿在回答复述"
+              },
+              "otp_secret": {
+                "type": "string",
+                "description": "2FA验证器密钥，不是六位验证码；勿在回答复述"
+              }
+            },
+            "required": [
+              "platform_id",
+              "login"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 100
+        },
+        "allow_duplicate_name": {
+          "type": "boolean"
+        },
+        "relink_preserved": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_delete",
+    "action": "remove",
+    "description": "移除环境定义，自动备份，保留网站数据和账号；必须用户确认。不能移除当前活动环境。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_id": {
+          "type": "string",
+          "description": "环境准确编号；不能用模糊名称代替",
+          "maxLength": 64
+        },
+        "revision": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [
+        "env_id",
+        "revision"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_accounts",
+    "action": "accounts",
+    "description": "一个环境的多个平台账号：list/save/delete/open/fill/check/confirm/credential/totp。save支持新建或编辑多条账号；编辑带revision。fill只在本机向对应网站填写，不自动提交。网页操作限本会话所选环境。删除、覆盖已有密码/2FA、修改账号身份、向会话读取密钥需用户确认。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "save",
+            "delete",
+            "open",
+            "fill",
+            "check",
+            "confirm",
+            "credential",
+            "totp"
+          ]
+        },
+        "env_id": {
+          "type": "string",
+          "description": "环境准确编号；不能用模糊名称代替",
+          "maxLength": 64
+        },
+        "account_id": {
+          "type": "string",
+          "description": ""
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "accounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "description": "编辑时必填现有账号编号；新建省略"
+              },
+              "client_id": {
+                "type": "string",
+                "description": "新建幂等编号；省略由工具生成"
+              },
+              "platform_id": {
+                "type": "string",
+                "description": "目录中的平台id，例如facebook、instagram、amazon或custom"
+              },
+              "platform": {
+                "type": "string",
+                "description": "自定义平台的显示名称"
+              },
+              "login": {
+                "type": "string",
+                "description": "登录账号"
+              },
+              "username": {
+                "type": "string",
+                "description": "用户名"
+              },
+              "url": {
+                "type": "string",
+                "description": "网站地址；默认使用平台目录地址"
+              },
+              "site": {
+                "type": "string",
+                "description": "站点名称"
+              },
+              "label": {
+                "type": "string",
+                "description": "备注"
+              },
+              "password": {
+                "type": "string",
+                "description": "密码；优先保存后用fill在本机填写，勿在回答复述"
+              },
+              "otp_secret": {
+                "type": "string",
+                "description": "2FA验证器密钥，不是六位验证码；勿在回答复述"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "password_action": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "replace",
+                  "clear"
+                ]
+              },
+              "otp_secret_action": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "replace",
+                  "clear"
+                ]
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "maxItems": 100
+        },
+        "field": {
+          "type": "string",
+          "enum": [
+            "password",
+            "otp_secret"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "description": "本次6–8位验证码，不保存"
+        }
+      },
+      "required": [
+        "env_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_proxy_test",
+    "action": "proxy-test",
+    "description": "真实测试代理出口、HTTPS往返延迟、城市、时区及IP。可传env_id读取该环境代理，或传proxy测试尚未保存的节点；失败不能说成功，地理信息不可用需如实说明。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_id": {
+          "type": "string",
+          "description": "环境准确编号；不能用模糊名称代替",
+          "maxLength": 64
+        },
+        "proxy": {
+          "type": "string",
+          "description": "http(s)/socks4/socks5://主机:端口，或direct/system；当前不支持认证代理"
+        },
+        "expected_exit_ip": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_proxy_job",
+    "action": "proxy-job",
+    "description": "检测两个及以上环境的代理优先使用本工具。start传env_ids，status/cancel传job_id。自动短暂等待，小批次可直接返回最终结果；只检测不修改代理。仍运行时按next_action查询。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "start",
+            "status",
+            "cancel"
+          ]
+        },
+        "env_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "环境准确编号；不能用模糊名称代替",
+            "maxLength": 64
+          },
+          "maxItems": 1000
+        },
+        "job_id": {
+          "type": "string",
+          "description": ""
+        },
+        "request_id": {
+          "type": "string",
+          "description": ""
+        },
+        "wait_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "最多等待任务结果的毫秒数；默认1500，小批次通常直接返回最终结果。0立即返回，仍运行时按next_action查询。"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_import",
+    "action": "import",
+    "description": "批量新建环境、导入代理、多账号。生成示例：{action:preview,kind:environments,generate:{prefix:运营,start:1,count:4,group:海外}}；直连不用提供proxies。CSV预览传kind和text。预览校验后用{action:apply,job_id:预览返回编号}；小批次通常直接完成，仍运行按next_action查询。每批最多200行，保留已成功条目。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "apply",
+            "status",
+            "history",
+            "cancel",
+            "retry",
+            "discard",
+            "source"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "environments",
+            "proxies",
+            "accounts"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "description": "CSV/TSV文本，表头和必填项见environment_catalog"
+        },
+        "generate": {
+          "type": "object",
+          "properties": {
+            "prefix": {
+              "type": "string",
+              "description": ""
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "group": {
+              "type": "string",
+              "description": ""
+            },
+            "locale": {
+              "type": "string",
+              "description": ""
+            },
+            "start_url": {
+              "type": "string",
+              "description": ""
+            },
+            "proxies": {
+              "type": "string",
+              "description": "每行一个代理，数量与环境数相等；留空直连"
+            }
+          },
+          "required": [
+            "prefix",
+            "count"
+          ],
+          "additionalProperties": false
+        },
+        "job_id": {
+          "type": "string",
+          "description": ""
+        },
+        "request_id": {
+          "type": "string",
+          "description": "通常省略，由宿主自动生成；手动提供须32位十六进制"
+        },
+        "wait_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "最多等待任务结果的毫秒数；默认1500，小批次通常直接返回最终结果。0立即返回，仍运行时按next_action查询。"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_bulk_update",
+    "action": "bulk",
+    "description": "批量设置分组或标签。只修改明确列出的环境，返回逐行结果，不打开浏览器。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "环境准确编号；不能用模糊名称代替",
+            "maxLength": 64
+          },
+          "maxItems": 1000
+        },
+        "fields": {
+          "type": "object",
+          "properties": {
+            "group": {
+              "type": "string",
+              "description": ""
+            },
+            "tags": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "env_ids",
+        "fields"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_history",
+    "action": "history",
+    "description": "读取环境配置历史；restore恢复指定版本须用户确认，并携带当前revision。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_id": {
+          "type": "string",
+          "description": "环境准确编号；不能用模糊名称代替",
+          "maxLength": 64
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "restore"
+          ]
+        },
+        "version_id": {
+          "type": "string",
+          "description": ""
+        },
+        "revision": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [
+        "env_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_backup",
+    "action": "backup",
+    "description": "在本机创建配置备份，不包含账号密码或网站登录数据。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_restore",
+    "action": "restore",
+    "description": "预览或恢复环境配置备份。传backup_id或document；apply还需preview_token与env_ids。恢复覆盖须用户确认，网站数据保留。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "apply"
+          ]
+        },
+        "backup_id": {
+          "type": "string",
+          "description": ""
+        },
+        "document": {
+          "type": "object"
+        },
+        "preview_token": {
+          "type": "string",
+          "description": ""
+        },
+        "env_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "环境准确编号；不能用模糊名称代替",
+            "maxLength": 64
+          },
+          "maxItems": 1000
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_maintenance",
+    "action": "maintenance",
+    "description": "只读检查配置问题、备份目录及操作历史；不清理Cookie，不删除网站数据。",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_open",
+    "action": "open",
+    "description": "打开/切换本会话已经选中的环境，沿用其选择的账号会话。不能扩大浏览器范围。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_id": {
+          "type": "string",
+          "description": "环境准确编号；不能用模糊名称代替",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "env_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_draft",
+    "action": "draft",
+    "description": "读取、保存或清除管理页本机草稿。草稿可能含密码；所有操作须用户确认，避免泄露或覆盖用户未完成的表单。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "read",
+            "save",
+            "clear"
+          ]
+        },
+        "draft": {
+          "type": "object"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_account_transfer",
+    "action": "portable",
+    "description": "本机账号加密迁移：export/preview/import。导出或导入须用户确认，使用至少10字符迁移密码；包不包含网站登录数据。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "export",
+            "preview",
+            "import"
+          ]
+        },
+        "password": {
+          "type": "string",
+          "description": "迁移密码，至少10字符；不要在回答中重复"
+        },
+        "document": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "action",
+        "password"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_proxy_attach",
+    "action": "proxy-attach",
+    "description": "把尚未保存节点的检测receipt关联到对应环境。代理配置必须完全一致。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_id": {
+          "type": "string",
+          "description": "环境准确编号；不能用模糊名称代替",
+          "maxLength": 64
+        },
+        "receipt": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [
+        "env_id",
+        "receipt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_legacy_account",
+    "action": "account",
+    "description": "兼容旧版单账号资料的保存/清除，仅用于维护旧数据；新增多账号请使用environment_accounts。覆盖或清除需用户确认。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "env_id": {
+          "type": "string",
+          "description": "环境准确编号；不能用模糊名称代替",
+          "maxLength": 64
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "save",
+            "clear"
+          ]
+        },
+        "account": {
+          "type": "object",
+          "properties": {
+            "platform": {
+              "type": "string",
+              "description": ""
+            },
+            "label": {
+              "type": "string",
+              "description": ""
+            },
+            "username": {
+              "type": "string",
+              "description": ""
+            },
+            "password": {
+              "type": "string",
+              "description": ""
+            },
+            "otp_secret": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "env_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "environment_operation_status",
+    "action": "operation",
+    "description": "查询环境管理工具请求的最终结果。网络超时或outcome_unknown时必须先用此工具核实，不要重复写入。请求只属于当前DSH会话。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "工具返回的64位请求编号"
+        }
+      },
+      "required": [
+        "request_id"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

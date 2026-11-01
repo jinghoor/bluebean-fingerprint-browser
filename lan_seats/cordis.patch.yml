@@ -1,0 +1,7 @@
+# Bundle layer for the product's sidebar seats.
+#
+# Shape copied from dsh-web-app/cordis.patch.yml: a bundle patch is a flat list of id-targeted rows. An
+# - insert: wrapper is what the *base* bundle uses over the empty profile root; a later bundle that adds a new
+# row still just lists it.
+- id: lan-seats
+  name: 'lan-seats'

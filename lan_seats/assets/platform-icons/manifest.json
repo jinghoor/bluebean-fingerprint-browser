@@ -1,0 +1,136 @@
+{
+  "facebook": {
+    "title": "Facebook",
+    "file": "facebook.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://about.meta.com/brand/resources/facebook/logo",
+    "license": "CC0-1.0"
+  },
+  "instagram": {
+    "title": "Instagram",
+    "file": "instagram.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://about.meta.com/brand/resources/instagram",
+    "license": "CC0-1.0"
+  },
+  "tiktok": {
+    "title": "TikTok",
+    "file": "tiktok.svg",
+    "collection": "SVG Logos via @iconify-json/logos 1.2.18",
+    "source": "https://github.com/gilbarbara/logos",
+    "license": "CC0-1.0"
+  },
+  "x": {
+    "title": "X",
+    "file": "x.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://x.com",
+    "license": "CC0-1.0"
+  },
+  "youtube": {
+    "title": "YouTube",
+    "file": "youtube.svg",
+    "collection": "SVG Logos via @iconify-json/logos 1.2.18",
+    "source": "https://github.com/gilbarbara/logos",
+    "license": "CC0-1.0"
+  },
+  "linkedin": {
+    "title": "LinkedIn",
+    "file": "linkedin.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://brand.linkedin.com",
+    "license": "CC0-1.0"
+  },
+  "pinterest": {
+    "title": "Pinterest",
+    "file": "pinterest.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://business.pinterest.com/en/brand-guidelines",
+    "license": "CC0-1.0"
+  },
+  "amazon": {
+    "title": "Amazon",
+    "file": "amazon.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://www.amazon.com",
+    "license": "CC0-1.0"
+  },
+  "ebay": {
+    "title": "eBay",
+    "file": "ebay.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://go.developer.ebay.com/logos",
+    "license": "CC0-1.0"
+  },
+  "shopee": {
+    "title": "Shopee",
+    "file": "shopee.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://shopee.com",
+    "license": "CC0-1.0"
+  },
+  "lazada": {
+    "title": "Lazada",
+    "file": "lazada.svg",
+    "collection": "Arcticons via @iconify-json/arcticons 1.2.59",
+    "source": "https://github.com/Arcticons-Team/Arcticons",
+    "author": "Donnnno / Arcticons contributors",
+    "license": "CC-BY-SA-4.0",
+    "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+    "modifications": "Set stroke color to #F57224 and stroke width to 2.4; SVG path geometry unchanged."
+  },
+  "etsy": {
+    "title": "Etsy",
+    "file": "etsy.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://www.etsy.com/uk/press",
+    "license": "CC0-1.0"
+  },
+  "aliexpress": {
+    "title": "AliExpress",
+    "file": "aliexpress.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://www.alibabagroup.com/en/ir/reports",
+    "license": "CC0-1.0"
+  },
+  "shopify": {
+    "title": "Shopify",
+    "file": "shopify.svg",
+    "collection": "Simple Icons 13.0.0",
+    "source": "https://www.shopify.com/brand-assets",
+    "license": "CC0-1.0"
+  },
+  "google": {
+    "title": "Google",
+    "file": "google.svg",
+    "collection": "SVG Logos via @iconify-json/logos 1.2.18",
+    "source": "https://github.com/gilbarbara/logos",
+    "license": "CC0-1.0"
+  },
+  "microsoft": {
+    "title": "Microsoft",
+    "file": "microsoft.svg",
+    "collection": "SVG Logos via @iconify-json/logos 1.2.18",
+    "source": "https://github.com/gilbarbara/logos",
+    "license": "CC0-1.0"
+  },
+  "tiktok-shop": {
+    "title": "TikTok Shop",
+    "file": "tiktok.svg",
+    "collection": "TikTok brand glyph shared with TikTok",
+    "source": "https://github.com/gilbarbara/logos",
+    "license": "CC0-1.0"
+  },
+  "environment": {
+    "title": "浏览器环境",
+    "file": "environment.svg",
+    "collection": "Bluebean UI",
+    "license": "Project source license"
+  },
+  "custom": {
+    "title": "自定义网站",
+    "file": "custom.svg",
+    "collection": "Bluebean UI",
+    "license": "Project source license"
+  }
+}

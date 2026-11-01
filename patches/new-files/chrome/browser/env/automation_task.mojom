@@ -1,0 +1,45 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// Typed interface between the automation transport (loopback socket / file channel) and the
+// in-browser executor. Design doc §31/§32 measured the executor at 0.020 ms/op and the loopback
+// transport at 0.36 ms per task; this mojom is the seam that keeps the two apart, so the transport
+// can change (socket, pipe, Mojo channel) without touching the executor.
+
+module env.mojom;
+
+// One page operation. `kind` selects which fields matter:
+//   "click"   -> selector
+//   "type"    -> selector + text
+//   "read"    -> selector + limit
+//   "observe" -> limit
+struct Op {
+  string kind;
+  string selector;
+  string text;
+  int32 limit = 200;
+};
+
+struct OpResult {
+  bool ok;
+  string detail;
+};
+
+struct TaskResult {
+  bool ok;
+  string error;
+  string page_url;
+  double ms;
+  array<OpResult> results;
+};
+
+interface AutomationTask {
+  // Runs `ops` in order against the environment's active tab, in an isolated world.
+  RunTask(string env_id, array<Op> ops) => (TaskResult result);
+
+  // Clicks elements with *trusted* mouse events: the renderer only resolves positions, the
+  // browser process forwards the events through the renderer host's input pipeline, so the page
+  // sees `isTrusted: true`. This is the stealth path; `RunTask`'s "click" op is the fast one.
+  ClickTrusted(string env_id, array<string> selectors) => (TaskResult result);
+};
