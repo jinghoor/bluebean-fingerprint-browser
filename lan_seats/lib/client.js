@@ -25,7 +25,7 @@ window.__ModuleLoader__.load({
     function ProductInfo() {
       return h('div', { 'data-lan-product-info': '', style: { display: 'grid', gap: 5, fontSize: 12, lineHeight: '18px', userSelect: 'text' } },
         h('div', { style: { fontWeight: 600, color: 'var(--dsw-alias-text-primary,inherit)' } }, '蓝豆指纹浏览器 v' + BLUEBEAN_VERSION),
-        h('div', { style: { color: 'var(--dsw-alias-text-secondary,#687386)', overflowWrap: 'anywhere' } }, '作者：277030704@qq.com'));
+        h('div', { style: { color: 'var(--dsw-alias-text-secondary,#687386)', overflowWrap: 'anywhere' } }, '联系邮箱：277030704@qq.com'));
     }
 
     function installProductInfo(ctx) {
@@ -44,7 +44,7 @@ window.__ModuleLoader__.load({
             title.textContent = '蓝豆指纹浏览器 v' + BLUEBEAN_VERSION;
             title.style.fontWeight = '600';
             const author = document.createElement('div');
-            author.textContent = '作者：277030704@qq.com';
+            author.textContent = '联系邮箱：277030704@qq.com';
             author.style.cssText = 'color:var(--dsw-alias-text-secondary,#687386);overflow-wrap:anywhere';
             footer.append(title, author);
             (menu.querySelector('[role="presentation"]') || menu).append(footer);

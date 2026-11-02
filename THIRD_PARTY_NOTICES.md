@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-The BlueBean non-commercial license applies only to original BlueBean materials and does not relicense third-party components. Third-party components retain their own terms; commercial use permitted by an upstream license is not restricted by the BlueBean license.
+The BlueBean license applies only to original BlueBean materials and does not relicense third-party components. Each third-party component remains subject to its own license and notices.
 
 | Component | Where used | License / notice |
 |---|---|---|
@@ -11,4 +11,4 @@ The BlueBean non-commercial license applies only to original BlueBean materials 
 | DSH/Electron dependencies | Bundled workbench runtime | Individual licenses and notices are retained in the installed DSH application under `resources/app.asar.unpacked` and its package metadata. |
 | Social platform icons | `lan_seats/assets/platform-icons` | See `lan_seats/assets/platform-icons/NOTICE.md`; platform names and marks belong to their respective owners. |
 
-The release installer is an aggregate containing components under different licenses. Review each component's included license before redistributing or using it commercially. In particular, the BlueBean source-available license does not grant rights to third-party trademarks or replace upstream licenses.
+The release installer bundles components under different licenses. Review the included notices for each component; the BlueBean license does not grant rights to third-party trademarks or replace upstream licenses.

@@ -7,8 +7,8 @@
 - Reduce full environment catalog polling, pause it in hidden documents, and keep immediate updates after local edits.
 - Preserve clean first-run data, show setup guidance only on first use, and improve assistant/onboarding and environment panel behavior.
 - Include the environment check page, saved account details and initial connectivity fixes in the published application sources.
-- Show the BlueBean product version and author contact in the lower-left DSH menu and General settings.
-- Add a shared product version and Windows executable version metadata; continue to require written authorization for all commercial use.
+- Show the BlueBean product version and contact email in the lower-left DSH menu and General settings.
+- Add a shared product version and Windows executable version metadata.
 
 ## 1.0.1 - 2026-11-02
 

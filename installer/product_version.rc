@@ -24,7 +24,7 @@ BEGIN
             VALUE "FileVersion", BlueBeanVersionText
             VALUE "ProductName", L"\x84dd\x8c46\x6307\x7eb9\x6d4f\x89c8\x5668\0"
             VALUE "ProductVersion", BlueBeanVersionText
-            VALUE "LegalCopyright", L"Copyright (c) 2026 \x4f55\x9633\x9e3f\0"
+            VALUE "LegalCopyright", L"Copyright (c) 2026 BlueBean Fingerprint Browser\0"
         END
     END
     BLOCK "VarFileInfo"
