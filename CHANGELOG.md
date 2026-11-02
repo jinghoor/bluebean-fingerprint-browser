@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.4 - 2026-11-02
+
+- Include H.264/AAC playback support, with MP4, MSE/DASH and VP9/Opus playback regression checks.
+- Stabilize authenticated proxy negotiation with fragmented TCP replies; preserve reverse responses after a TCP half-close and clean up connections on shutdown.
+- Reduce full environment catalog polling, pause it in hidden documents, and keep immediate updates after local edits.
+- Preserve clean first-run data, show setup guidance only on first use, and improve assistant/onboarding and environment panel behavior.
+- Include the environment check page, saved account details and initial connectivity fixes in the published application sources.
+- Show the BlueBean product version and author contact in the lower-left DSH menu and General settings.
+- Add a shared product version and Windows executable version metadata; continue to require written authorization for all commercial use.
+
 ## 1.0.1 - 2026-11-02
 
 - Correct final local installer integrity labels inherited from restricted build folders; verify labels using Windows SIDs after the last delivery copy.

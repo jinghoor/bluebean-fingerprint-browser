@@ -18,6 +18,7 @@ import time
 import winreg
 
 from windows_security import file_integrity, sandbox_read_access
+from payload_policy import assert_clean_payload
 
 
 def file_hash(path: Path) -> str:
@@ -112,6 +113,8 @@ def main() -> None:
     args = parser.parse_args()
     app, payload, data = args.app.resolve(), args.payload.resolve(), args.data.resolve()
     assert app != data and not data.is_relative_to(app)
+    assert_clean_payload(payload)
+    assert_clean_payload(app)
     data.mkdir(parents=True, exist_ok=True)
     (data / "LocalAppData").mkdir(exist_ok=True)
     env = dict(os.environ, BLUEBEAN_HOME=str(app), BLUEBEAN_DATA=str(data),
@@ -262,6 +265,8 @@ def main() -> None:
             "shortcut_created": shortcut,
             "shortcut_targets": shortcuts,
         }
+    results["checks"]["plugin_template_after_startup"] = {"passed":
+        file_hash(app / "lan_seats/lib/client.js") == file_hash(payload / "lan_seats/lib/client.js")}
     results["passed"] = all(item["passed"] for item in results["checks"].values())
     args.report.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"passed": results["passed"], "checks": results["checks"]}, ensure_ascii=True))

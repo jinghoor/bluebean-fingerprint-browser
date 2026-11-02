@@ -1,0 +1,64 @@
+// Read-only production verification in an independent headless browser.
+const fs=require('node:fs');const path=require('node:path');
+const assert=require('node:assert/strict');
+const {chromium,request}=require('C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+(async()=>{
+ const root=path.resolve(__dirname,'..'),out=process.argv.includes('--output')?path.resolve(process.argv[process.argv.indexOf('--output')+1]):path.join(root,'.work/env-management-upgrade');
+ fs.mkdirSync(out,{recursive:true});
+ const config=JSON.parse(fs.readFileSync(path.join(root,'.lan-bridge.json'),'utf8'));
+ const api=await request.newContext({extraHTTPHeaders:{Authorization:'Bearer '+config.token}});
+ const browser=await chromium.launch({executablePath:'E:/chromium/src/out/Release-pgo/chrome.exe',headless:true,args:['--no-first-run','--disable-extensions']});
+ try{
+  const page=await browser.newPage({viewport:{width:1280,height:1000}});const errors=[];
+  const pluginResponses=[];
+  const blockedMutations=[];
+  page.on('response',response=>{if(new URL(response.url()).pathname.startsWith('/plugins/') && !response.url().includes('/events'))pluginResponses.push(response.text().catch(()=>''));});
+  page.on('pageerror',e=>errors.push(e.message));
+  await page.route('**/api/**',route=>/\/(describe|list|inventory|syncInspectManifest|modelCatalog|catalog|listProviders)$/.test(new URL(route.request().url()).pathname)?route.continue():route.fulfill({json:{ok:false,error:'Read-only verification'}}));
+  await page.route('http://127.0.0.1:'+config.port+'/**',async route=>{
+   const pathname=new URL(route.request().url()).pathname;
+   if(['/v1/lan/manage/list','/v1/lan/manage/maintenance'].includes(pathname))return route.fulfill({response:await api.post('http://127.0.0.1:'+config.port+pathname,{data:{}})});
+   if(pathname==='/v1/lan/manage/proxy-job' && ['status',undefined].includes(route.request().postDataJSON()?.action))return route.fulfill({response:await api.post('http://127.0.0.1:'+config.port+pathname,{data:route.request().postDataJSON()||{}})});
+   if(pathname.startsWith('/v1/lan/manage/') || pathname==='/v1/lan/activate')blockedMutations.push(pathname);
+   return route.fulfill({json:{ok:true,envs:[],active:'',scope_env_ids:[]}});
+  });
+  await page.goto(JSON.parse(fs.readFileSync(path.join(root,'.dsh-web.json'),'utf8')).url);
+  await page.getByText('我的环境',{exact:true}).click();
+  await page.locator('.lm-row').first().waitFor();
+  assert.equal(await page.locator('.lm-row').count(),3);
+  await page.screenshot({path:path.join(out,'deployed-list.png')});
+  await page.getByRole('searchbox',{name:'搜索',exact:true}).fill('fb-020');
+  await page.getByRole('combobox',{name:'状态',exact:true}).selectOption('active');
+  await page.getByRole('combobox',{name:'排序',exact:true}).selectOption('recent');
+  await page.reload();await page.getByText('我的环境',{exact:true}).click();
+  await page.locator('.lm-row').first().waitFor();
+  assert.equal(await page.locator('.lm-row').count(),1);
+  assert.equal(await page.getByRole('searchbox',{name:'搜索',exact:true}).inputValue(),'fb-020');
+  assert.equal(await page.getByRole('combobox',{name:'状态',exact:true}).inputValue(),'active');
+  assert.equal(await page.getByRole('combobox',{name:'排序',exact:true}).inputValue(),'recent');
+  await page.getByRole('searchbox',{name:'搜索',exact:true}).fill('');
+  await page.getByRole('combobox',{name:'状态',exact:true}).selectOption('');
+  const originalRow=page.locator('.lm-row').filter({hasText:'fb-008'});
+  await originalRow.getByRole('button',{name:'详情',exact:true}).click();
+  await page.getByRole('button',{name:'复制配置',exact:true}).click();
+  await page.locator('[data-copy-source]').waitFor();
+  assert.notEqual(await page.locator('[name=env_id]').inputValue(),'fb-008');
+  for(const name of ['fingerprint_seed','account.username','account.password','account.otp_secret'])assert.equal(await page.locator(`[name="${name}"]`).inputValue(),'');
+  await page.screenshot({path:path.join(out,'deployed-copy-draft.png'),animations:'disabled'});
+  await page.locator('.lan-manager').evaluate(el=>el.style.width='480px');
+  assert.equal(await page.locator('.lan-manager').evaluate(el=>el.scrollWidth>el.clientWidth+1),false);
+  await page.screenshot({path:path.join(out,'deployed-copy-480.png'),animations:'disabled'});
+  await page.locator('.lan-manager').evaluate(el=>el.style.width='');
+  await page.getByRole('button',{name:'返回列表',exact:true}).click();
+  assert.equal(await page.locator('.lm-row').count(),3);
+  await page.getByRole('tab',{name:'维护中心',exact:true}).click();
+  await page.getByRole('heading',{name:'环境定义检查',exact:true}).waitFor();
+  await page.screenshot({path:path.join(out,'deployed-maintenance.png')});
+  assert.deepEqual(errors,[]);
+  assert.deepEqual(blockedMutations,[]);
+  const inspectionFeatures=(await Promise.all(pluginResponses)).some(body=>body.includes('const readJobId') && body.includes('重测异常项'));
+  assert.ok(inspectionFeatures,'Installed inspection upgrade not loaded');
+  fs.writeFileSync(path.join(out,'deployed-ui.json'),JSON.stringify({ok:true,real_installed_plugin:true,read_only:true,env_count:3,persistent_filters_verified:true,inspection_features_loaded:inspectionFeatures,copy_draft_verified:true,mutation_attempts:blockedMutations,page_errors:errors},null,2));
+  console.log('PASS: installed DSH plugin + production bridge API v2, 3 preserved environments, management list and maintenance entry visible; no user window touched.');
+ }finally{await browser.close();await api.dispose();}
+})().catch(e=>{console.error(e);process.exitCode=1});

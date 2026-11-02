@@ -151,6 +151,8 @@ class EnvironmentAgentService:
                     risk('browser_identity','修改指纹或语言身份可能影响网站登录和风控；网站数据保留，需重启后完整生效。')
                 if desired['proxy']!=definition(row)['proxy']:
                     warnings.append('代理变更需重启蓝豆浏览器后完整生效，请先检测出口。')
+                if desired['ip_mode'] == 'dynamic' and definition(row)['ip_mode'] != 'dynamic':
+                    risk('dynamic_ip', '改为动态 IP 后将不再提示出口 IP 变化，请确认此环境确实使用动态代理。')
             if a.get('relink_preserved'): risk('relink','此编号可能保留旧账号和网站数据，将重新关联旧资料。')
             a={**a,**desired}
             if a.get('initial_accounts'):

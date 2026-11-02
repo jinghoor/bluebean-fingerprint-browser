@@ -267,15 +267,26 @@ class Relay:
                 server = loop.run_until_complete(self._serve())
                 self._server = server
                 self._port = server.sockets[0].getsockname()[1]
+                ready.set()
+                loop.run_forever()
             except Exception as e:                      # noqa: BLE001
                 self._error = f"{type(e).__name__}: {e}"
                 ready.set()
-                return
-            ready.set()
-            try:
-                loop.run_forever()
             finally:
+                # Let connection handlers close both ends before destroying the
+                # private loop (notably Windows' pending IOCP accept operations).
+                if self._server:
+                    self._server.close()
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                if self._server:
+                    loop.run_until_complete(self._server.wait_closed())
+                loop.run_until_complete(loop.shutdown_asyncgens())
                 loop.close()
+                self._port = 0
 
         self._thread = threading.Thread(target=run, daemon=True,
                                         name="fp-proxy-relay")
@@ -286,12 +297,9 @@ class Relay:
             raise SystemExit(f"relay failed to start: {self._error}")
 
     def _stop(self) -> None:
-        if self._loop and self._server:
-            def shutdown() -> None:
-                self._server.close()
-                self._loop.stop()
+        if self._loop:
             try:
-                self._loop.call_soon_threadsafe(shutdown)
+                self._loop.call_soon_threadsafe(self._loop.stop)
             except RuntimeError:
                 pass
         if self._thread:
@@ -321,27 +329,42 @@ class Relay:
         except Exception:                               # noqa: BLE001
             pass
         finally:
-            try:
-                writer.close()
-            except Exception:                           # noqa: BLE001
-                pass
+            await self._close_writer(writer)
+
+    @staticmethod
+    async def _close_writer(writer: asyncio.StreamWriter) -> None:
+        writer.close()
+        try:
+            await asyncio.wait_for(writer.wait_closed(), timeout=2)
+        except (OSError, asyncio.TimeoutError):
+            pass
 
     async def _pipe(self, reader: asyncio.StreamReader,
                     writer: asyncio.StreamWriter) -> None:
+        while True:
+            chunk = await reader.read(65536)
+            if not chunk:
+                # TCP EOF only ends this direction. The server may still be
+                # sending a response; closing the socket here truncates it.
+                if writer.can_write_eof():
+                    writer.write_eof()
+                    await writer.drain()
+                else:
+                    # TLS transports do not support TCP half-close.
+                    writer.close()
+                return
+            writer.write(chunk)
+            await writer.drain()
+
+    async def _tunnel(self, reader, writer, up_r, up_w) -> None:
+        pipes = [asyncio.create_task(self._pipe(reader, up_w)),
+                 asyncio.create_task(self._pipe(up_r, writer))]
         try:
-            while True:
-                chunk = await reader.read(65536)
-                if not chunk:
-                    break
-                writer.write(chunk)
-                await writer.drain()
-        except Exception:                               # noqa: BLE001
-            pass
+            await asyncio.gather(*pipes)
         finally:
-            try:
-                writer.close()
-            except Exception:                           # noqa: BLE001
-                pass
+            for task in pipes:
+                task.cancel()
+            await asyncio.gather(*pipes, return_exceptions=True)
 
     # -- SOCKS5 ------------------------------------------------------------
     async def _socks5(self, reader: asyncio.StreamReader,
@@ -383,10 +406,12 @@ class Relay:
             writer.write(b"\x05\x05\x00\x01" + b"\x00" * 6)
             await writer.drain()
             return
-        writer.write(b"\x05\x00\x00\x01" + b"\x00" * 6)
-        await writer.drain()
-        await asyncio.gather(self._pipe(reader, up_w),
-                             self._pipe(up_r, writer))
+        try:
+            writer.write(b"\x05\x00\x00\x01" + b"\x00" * 6)
+            await writer.drain()
+            await self._tunnel(reader, writer, up_r, up_w)
+        finally:
+            await self._close_writer(up_w)
 
     async def _connect_upstream_socks5(self, addr: bytes, port: int):
         spec = self.spec
@@ -397,7 +422,6 @@ class Relay:
             return None, None
         try:
             if spec.username:
-                r_, w = r, w
                 # Offer user/pass ONLY. Measured: offering a "no authentication"
                 # method as well let the upstream pick it, and the unauthenticated
                 # session could reach some hosts but stalled on facebook.com,
@@ -406,54 +430,44 @@ class Relay:
                 # to the same upstream reached all four in 2-4 s).
                 w.write(b"\x05\x01\x02")                # user/pass only
                 await w.drain()
-                resp = await asyncio.wait_for(r.read(2), timeout=10)
-                if resp[0] != 5:
-                    raise RuntimeError("bad socks version")
+                resp = await asyncio.wait_for(r.readexactly(2), timeout=10)
+                if resp[0] != 5 or resp[1] != 2:
+                    raise RuntimeError("upstream did not select the offered authentication method")
                 if resp[1] == 2:
                     u = spec.username.encode()
                     p = spec.password.encode()
                     w.write(b"\x01" + bytes([len(u)]) + u + bytes([len(p)]) + p)
                     await w.drain()
                     auth = await asyncio.wait_for(r.readexactly(2), timeout=10)
-                    if auth[1] != 0:
+                    if auth != b"\x01\x00":
                         raise RuntimeError("upstream rejected credentials")
-                elif resp[1] != 0:
-                    raise RuntimeError(f"no acceptable auth method ({resp[1]})")
             else:
                 w.write(b"\x05\x01\x00")
                 await w.drain()
-                await asyncio.wait_for(r.readexactly(2), timeout=10)
+                if await asyncio.wait_for(r.readexactly(2), timeout=10) != b"\x05\x00":
+                    raise RuntimeError("upstream did not select the offered authentication method")
 
             # addr already carries its own ATYP, so it can be forwarded verbatim.
             # A domain reaches the upstream unresolved, which keeps DNS off the host.
             w.write(b"\x05\x01\x00" + addr + struct.pack("!H", port))
             await w.drain()
-            _t0 = asyncio.get_event_loop().time()
-            try:
-                head = await asyncio.wait_for(r.readexactly(4), timeout=20)
-            except Exception as exc:
-                print(f"RELAYDBG connect-reply {type(exc).__name__} after "
-                      f"{asyncio.get_event_loop().time() - _t0:.1f}s "
-                      f"addr={addr!r} port={port}", flush=True)
-                raise
-            print(f"RELAYDBG reply={head.hex()} after "
-                  f"{asyncio.get_event_loop().time() - _t0:.1f}s addr={addr!r}",
-                  flush=True)
-            if head[1] != 0:
+            head = await asyncio.wait_for(r.readexactly(4), timeout=20)
+            if head[:3] != b"\x05\x00\x00":
                 raise RuntimeError(f"CONNECT failed, reply {head[1]}")
             if head[3] == 1:
-                await r.readexactly(4 + 2)
+                await asyncio.wait_for(r.readexactly(4 + 2), timeout=10)
             elif head[3] == 3:
-                n = (await r.readexactly(1))[0]
-                await r.readexactly(n + 2)
+                n = (await asyncio.wait_for(r.readexactly(1), timeout=10))[0]
+                await asyncio.wait_for(r.readexactly(n + 2), timeout=10)
             elif head[3] == 4:
-                await r.readexactly(16 + 2)
+                await asyncio.wait_for(r.readexactly(16 + 2), timeout=10)
+            else:
+                raise RuntimeError("invalid upstream address type")
             return r, w
-        except Exception:                               # noqa: BLE001
-            try:
-                w.close()
-            except Exception:                           # noqa: BLE001
-                pass
+        except (Exception, asyncio.CancelledError) as exc:
+            await self._close_writer(w)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             return None, None
 
     # -- HTTP CONNECT ------------------------------------------------------
@@ -495,10 +509,12 @@ class Relay:
             writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
             await writer.drain()
             return
-        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-        await writer.drain()
-        await asyncio.gather(self._pipe(reader, up_w),
-                             self._pipe(up_r, writer))
+        try:
+            writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            await writer.drain()
+            await self._tunnel(reader, writer, up_r, up_w)
+        finally:
+            await self._close_writer(up_w)
 
     async def _connect_upstream_http(self, host: str, port: int,
                                      client_headers: list[bytes]):
@@ -543,11 +559,10 @@ class Relay:
             if code != 200:
                 raise RuntimeError(f"upstream CONNECT returned {code}")
             return r, w
-        except Exception:                               # noqa: BLE001
-            try:
-                w.close()
-            except Exception:                           # noqa: BLE001
-                pass
+        except (Exception, asyncio.CancelledError) as exc:
+            await self._close_writer(w)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             return None, None
 
 

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>环境启动检测 · 蓝豆</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 32px;
+    font: 14px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif;
+    color: #1f2328; background: #f6f7f9;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; display: grid;
+          grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; }
+  /* The side panel takes ~360px off the page area, so the two-column layout must
+     collapse well before the window itself gets narrow. */
+  @media (max-width: 1040px) {
+    .wrap { grid-template-columns: minmax(0, 1fr); }
+  }
+  .card { background: #fff; border-radius: 10px; padding: 22px 26px;
+          box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+  .head { display: flex; align-items: center; justify-content: space-between; }
+  .env { font-size: 15px; color: #24292f; }
+  .refresh { color: #2f6fdb; cursor: pointer; user-select: none;
+             background: none; border: 0; font: inherit; }
+  .ip { display: flex; align-items: center; justify-content: center; gap: 12px;
+        margin: 18px 0 6px; font-size: 27px; font-weight: 600; letter-spacing: .2px; }
+  .badge { width: 26px; height: 26px; border-radius: 50%; background: #22b14c;
+           color: #fff; display: grid; place-items: center; font-size: 15px; }
+  .badge.bad { background: #e5484d; }
+  .services { display: flex; justify-content: center; gap: 0; margin: 14px 0 10px; }
+  .svc { display: flex; align-items: center; gap: 6px; padding: 0 16px;
+         border-right: 1px solid #e6e8eb; color: #24292f; }
+  .svc:last-child { border-right: 0; }
+  .dot { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid #9aa4af;
+         display: grid; place-items: center; font-size: 9px; color: #fff; }
+  .dot.ok { border-color: #22b14c; background: #22b14c; }
+  .dot.bad { border-color: #e5484d; background: #e5484d; }
+  .geo { display: flex; justify-content: center; gap: 26px; color: #57606a;
+         margin-top: 10px; flex-wrap: wrap; }
+  h2 { font-size: 13px; font-weight: 500; color: #6e7781; margin: 0 0 14px; }
+  .row { display: flex; gap: 12px; margin: 9px 0; align-items: baseline; }
+  .k { color: #6e7781; min-width: 96px; }
+  .v { color: #1f2328; word-break: break-all; }
+  .ok-text { color: #1a7f37; }
+  .bad-text { color: #cf222e; }
+  .muted { color: #8c959f; }
+  .actions { margin-top: 18px; display: flex; gap: 10px; }
+  .btn { border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 7px;
+         padding: 7px 14px; font: inherit; cursor: pointer; }
+  .btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+</style>
+<style>
+body{padding:24px}.wrap{grid-template-columns:minmax(0,1fr) 340px}.card{min-width:0}h1{font-size:21px;margin:4px 0 8px}.subtitle{color:#57606a;margin:0 0 16px}.status{padding:12px 14px;background:#edf4ff;border-radius:7px;min-height:52px;line-height:1.7}.status.warn{background:#fff5e5;color:#7d4e00}.status.error{background:#fff0f0;color:#a5141a}.status.success{background:#edf8f0;color:#166534}.progress{height:3px;margin-top:12px;background:#e4eaf3;overflow:hidden;border-radius:4px}.progress.running:after{content:'';display:block;height:100%;width:35%;background:#1f6feb;animation:loading 1.4s ease-in-out infinite}.ip{font-size:25px;overflow-wrap:anywhere}.services{display:grid;grid-template-columns:1fr 1fr;gap:10px}.svc{border:0;padding:8px;background:#f6f8fa;border-radius:6px;font-size:13px}.geo{justify-content:flex-start;gap:8px 18px}.actions{display:flex;flex-direction:column;gap:9px}.btn{min-height:38px;text-align:left}.btn:disabled{cursor:wait;opacity:.6}.btn:focus-visible,.refresh:focus-visible{outline:3px solid #8bb9ff;outline-offset:3px}.btn.danger{color:#b42318;background:white}.row{justify-content:space-between}.v{text-align:right}.muted{color:#66717d}aside.card{align-self:start}aside p{line-height:1.8;font-size:13px}details{margin-top:18px}summary{cursor:pointer;color:#57606a}.fade{animation:appear .18s ease-out}.dot.pending{background:#9aa4af}.dot.restricted{border-color:#b77b12;background:#b77b12}@keyframes loading{from{transform:translateX(-100%)}to{transform:translateX(400%)}}@keyframes appear{from{opacity:.65}to{opacity:1}}@media(max-width:1040px){.wrap{grid-template-columns:1fr}}@media(max-width:480px){body{padding:12px}.card{padding:18px}.services{grid-template-columns:1fr}.row{flex-wrap:wrap}.v{text-align:left}.ip{font-size:21px}}@media(prefers-reduced-motion:reduce){*,*:after{animation:none!important}.progress.running:after{width:100%}}
+</style>
+
+<style>
+.account-panel{position:sticky;top:24px}.account-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.account-heading h2{font-size:16px;font-weight:600;color:#1f2328;margin:0}.account-heading h2 span{color:#6e7781;font-size:13px;font-weight:400}.account-panel>p.muted{font-size:12px;line-height:1.7;margin:10px 0 14px}.account-list{max-height:calc(100vh - 250px);min-height:90px;overflow-y:auto;scrollbar-gutter:stable}.account{padding:13px 0;border-bottom:1px solid #e8ebef}.account:first-child{padding-top:3px}.account:last-child{border:0}.account-main{display:flex;align-items:center;gap:10px;min-height:42px}.account-main img{object-fit:contain;flex:none}.account-identity{min-width:0;flex:1}.account-identity strong,.account-identity span{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.account-identity strong{font-size:14px;font-weight:600}.account-identity span{font-size:12px;color:#66717d;margin-top:2px}.account-open{flex:none;width:62px;text-align:center;padding:5px 8px;min-height:32px;background:#fff;border-color:#a4c3f4;color:#155dcc}.account-open:not(:disabled):hover{background:#edf4ff}.account-otp{display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:30px;margin-top:5px;padding-left:34px;font-size:12px}.otp-reveal{font:inherit;color:#2f6fdb;border:0;padding:3px 0;background:none;cursor:pointer}.otp-code{font:600 20px/1.2 Consolas,monospace;letter-spacing:3px;border:0;padding:2px 0;background:none;color:#155dcc;cursor:pointer;font-variant-numeric:tabular-nums}.otp-time{color:#66717d;white-space:nowrap;font-variant-numeric:tabular-nums}.account-message{color:#b42318;min-height:22px;margin:8px 0 0;font-size:12px;overflow-wrap:anywhere}.account-footer{color:#66717d;font-size:12px;line-height:1.7;border-top:1px solid #e8ebef;margin:8px 0 0;padding-top:12px}.account-empty{margin:10px 0;font-size:13px;line-height:1.8;color:#66717d}.network-summary{display:flex;flex-wrap:wrap;gap:6px 18px;padding-top:14px;font-size:12px;color:#66717d}.network-summary strong{font-weight:500;color:#24292f;margin-left:5px}.gate-actions{flex-direction:row;flex-wrap:wrap;margin-top:10px}.gate-actions .btn{text-align:center}.clipboard-field{position:fixed;left:-9999px;top:0}.btn:disabled{cursor:default}.otp-reveal:focus-visible,.otp-code:focus-visible,.credential-reveal:focus-visible,.credential-value:focus-visible{outline:3px solid #8bb9ff;outline-offset:3px}@media(max-width:1040px){.account-panel{position:static}.account-list{max-height:none}}@media(prefers-reduced-motion:no-preference){.account-open{transition:background .15s ease}.otp-code,.credential-value{transition:color .15s ease}}
+</style>
+<style>
+[hidden]{display:none!important}
+.account-credential,.account-otp{display:grid;grid-template-columns:44px minmax(0,1fr) auto auto;gap:8px;padding-left:0;align-items:center;min-height:30px;font-size:13px}
+.account-otp{grid-template-columns:44px minmax(0,1fr) auto}
+.credential-label{color:#66717d;font-size:12px;white-space:nowrap}
+.account-details{display:grid;gap:2px;margin-top:8px}.account-field{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:8px;align-items:start;min-height:28px}.account-login-value{display:block;min-width:0;white-space:normal!important;overflow-wrap:anywhere;word-break:break-word!important;overflow:visible!important;text-overflow:clip!important}.account-login-copy{width:42px;text-align:right;flex:none;border:0;background:none;color:#155dcc;font:inherit;font-size:13px;line-height:1.55;padding:0;cursor:pointer}.account-login-copy:focus-visible{outline:3px solid #8bb9ff;outline-offset:2px}
+.credential-value{font:14px/1.5 Consolas,monospace;letter-spacing:0;color:#24292f;max-width:none;white-space:normal;overflow-wrap:anywhere;user-select:text}
+.credential-reveal{font:inherit;color:#155dcc;border:0;background:none;padding:4px 0;cursor:pointer}.credential-reveal:disabled{color:#66717d;cursor:default}
+.otp-time{font:inherit;font-size:12px;line-height:1.5;border:0;padding:4px 0;background:none;cursor:pointer;color:#57606a}
+.otp-code{justify-self:start;font-size:20px;letter-spacing:2px}
+.account-message{font-size:13px;color:#57606a}.account-message[data-tone="error"]{color:#b42318}.account-panel>p.muted{font-size:13px}
+</style>
+<main class="wrap">
+<section class="card">
+<div class="head"><div><div class="env" id="env">当前环境</div><h1>环境启动检测</h1></div><button class="refresh" id="refresh">重新检测</button></div>
+<p class="subtitle">先核对网络出口，再开始使用此环境。</p>
+<div id="status" class="status" role="status" aria-live="polite">正在读取环境设置…</div><div class="progress running" id="progress"></div>
+<div class="ip" id="ipnum">等待检测</div><div class="geo" id="geo"></div>
+<h2 style="margin-top:22px">示例网站连通性</h2><div class="services" id="services"></div>
+<p class="muted" id="network-note">所有请求只经过当前环境配置的代理，不检测其他环境。</p>
+<div class="network-summary"><span>已保存 IP <strong id="expected">读取中</strong></span><span>本次出口 <strong id="current">等待检测</strong></span><span id="mode">静态 IP</span></div><p id="explain" class="muted">检测结束前暂不能打开账号网站。</p><div class="actions gate-actions" id="actions"></div>
+<details open><summary>当前页面可见的基础指纹</summary>
+<div class="row"><span class="k">语言</span><span class="v" id="lang"></span></div>
+<div class="row"><span class="k">时区</span><span class="v" id="tz"></span></div>
+<div class="row"><span class="k">平台</span><span class="v" id="platform"></span></div>
+<div class="row"><span class="k">屏幕</span><span class="v" id="screen"></span></div>
+<div class="row"><span class="k">Intl 区域</span><span class="v" id="intl"></span></div>
+<div class="row"><span class="k">User-Agent</span><span class="v" id="ua"></span></div>
+</details>
+</section>
+<aside class="card account-panel"><div class="account-heading"><h2>已保存账号 <span id="account-count"></span></h2><button class="refresh" id="accounts-refresh">刷新</button></div><p class="muted" id="account-hint">完成左侧检测后，即可打开账号。</p><div id="account-list" class="account-list"><p class="account-empty">正在读取账号…</p></div><p id="account-message" class="account-message" role="status" aria-live="polite"></p><p class="account-footer">密码默认隐藏，显示后 15 秒自动隐藏。2FA 自动更新，点击验证码即可复制。</p></aside>
+</main>
+<script src="/client.js"></script></html>

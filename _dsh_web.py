@@ -18,6 +18,7 @@ Why this exists: the workbench is `dsh web` (profile `web`) served from a produc
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.cookiejar
 import json
 import os
@@ -34,6 +35,8 @@ sys.path.insert(0, str(HERE))
 
 from _nowindow import detached_no_window, hidden_startup_info, no_window  # noqa: E402
 from bluebean_paths import APP_ROOT, DATA_ROOT, DSH_BIN, DSH_EXE  # noqa: E402
+from bluebean_version import VERSION  # noqa: E402
+from _runtime_state import atomic_json, atomic_text, process_identity, startup_lock
 
 EXE = str(DSH_EXE)
 BIN = str(DSH_BIN)
@@ -53,26 +56,23 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
-    STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_json(STATE, state)
 
 
 def process_alive(pid: int) -> bool:
     """Cheap liveness check that does not touch the network."""
     if not pid:
         return False
-    out = subprocess.run(
-        ["powershell", "-NoProfile", "-Command",
-         f"if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ 'yes' }} else {{ 'no' }}"],
-        capture_output=True, text=True, timeout=20, creationflags=no_window()).stdout
-    return out.strip() == "yes"
+    return bool(process_identity(pid).get("alive"))
 
 
-def probe(url: str, timeout: float = 20.0) -> tuple[bool, str]:
+def probe(url: str, timeout: float = 1.5) -> tuple[bool, str]:
     """GET the workbench the way a browser does: token first, then the auth cookie it sets."""
     if not url:
         return False, "no url"
     jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                                        urllib.request.HTTPCookieProcessor(jar))
     try:
         with opener.open(url, timeout=timeout) as response:
             body = response.read(2000).decode("utf-8", "replace")
@@ -94,12 +94,32 @@ def api_key() -> str:
     return os.environ.get("DEEPSEEK_API_KEY", "").strip()
 
 
+def plugin_signature() -> str:
+    digest = hashlib.sha256()
+    for relative in ("lan_plugin/index.js", "lan_seats/lib/client.js"):
+        digest.update((APP_ROOT / relative).read_bytes())
+    return digest.hexdigest()
+
+
+def bridge_signature() -> str:
+    path = DATA_ROOT / ".lan-bridge.json"
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+
+
+def owns_state(state: dict) -> bool:
+    identity = process_identity(int(state.get("pid") or 0))
+    return bool(identity.get("alive") and
+                state.get("home") == str(HOME) and state.get("app_root") == str(APP_ROOT.resolve()) and
+                state.get("process_started") == identity.get("started") and
+                pathlib.Path(identity.get("image", "")).resolve() == DSH_EXE.resolve())
+
+
 def sync_seat_plugin() -> None:
     """Copy the seat plugin's client half into the profile install with live bridge credentials.
 
-    pnpm hardlinks package.json and lib/index.js, but lib/client.js is an ordinary copy - without this step a
-    source edit never reaches the workbench. The token is refreshed at the same time because it changes when the
-    bridge restarts.
+    pnpm may hardlink every package file, including client.js, to the bundled
+    template. Replace the profile's leaf atomically so per-home credentials
+    never mutate the installation or another home's plugin.
     """
     source = APP_ROOT / "lan_seats" / "lib" / "client.js"
     installed = HOME / "profiles" / "web" / "node_modules" / "lan-seats" / "lib" / "client.js"
@@ -108,11 +128,13 @@ def sync_seat_plugin() -> None:
         return
     config = json.loads(config_file.read_text(encoding="utf-8"))
     text = source.read_text(encoding="utf-8")
+    text = re.sub(r"const BLUEBEAN_VERSION = '[^']*';",
+                  "const BLUEBEAN_VERSION = '" + VERSION + "';", text)
     text = re.sub(r"const BASE = '[^']*';",
                   "const BASE = 'http://127.0.0.1:" + str(config["port"]) + "';", text)
     text = re.sub(r"const TOKEN = '[^']*';",
                   "const TOKEN = '" + str(config["token"]) + "';", text)
-    installed.write_text(text, encoding="utf-8")
+    atomic_text(installed, text)
 
 
 def start(timeout: float = 120.0) -> dict:
@@ -172,7 +194,10 @@ def start(timeout: float = 120.0) -> dict:
         return {"ok": False, "error": f"probe failed: {detail}", "url": url}
 
     state = {"url": url, "pid": process.pid, "port": int(url.split(":")[2].split("/")[0]),
-             "home": str(HOME), "started_at": int(time.time()), "probe": detail}
+             "home": str(HOME), "started_at": int(time.time()), "probe": detail,
+             "app_root": str(APP_ROOT.resolve()),
+             "process_started": process_identity(process.pid).get("started"),
+             "plugin_signature": plugin_signature(), "bridge_signature": bridge_signature()}
     save_state(state)
     return {"ok": True, **state}
 
@@ -180,8 +205,16 @@ def start(timeout: float = 120.0) -> dict:
 def prepare_profile() -> None:
     """Initialize a clean DSH web profile and install only bundled product plugins."""
     target = HOME / "profiles" / "web"
-    marker = target / ".bluebean-plugins-ready-v1"
-    if marker.is_file():
+    marker = target / ".bluebean-plugins-ready-v2"
+    signature = plugin_signature()
+    installed = all((target / "node_modules" / name / "package.json").is_file()
+                    for name in ("lan-browser", "lan-seats"))
+    if installed and marker.is_file() and marker.read_text(encoding="utf-8").strip() == signature:
+        return
+    if installed:
+        # Existing profile: update our client in place, preserve user's plugins/config.
+        sync_seat_plugin()
+        marker.write_text(signature, encoding="utf-8")
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
@@ -212,29 +245,36 @@ def prepare_profile() -> None:
         "    - id: lan-seats\n"
         "      name: lan-seats\n",
         encoding="utf-8")
-    marker.write_text("bundled plugins initialized\n", encoding="utf-8")
+    marker.write_text(signature, encoding="utf-8")
 
 
 def stop() -> dict:
     state = load_state()
     pid = int(state.get("pid") or 0)
-    if pid and process_alive(pid):
+    if pid and owns_state(state):
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                        capture_output=True, text=True, creationflags=no_window())
         time.sleep(0.8)
-    STATE.unlink(missing_ok=True)
-    return {"ok": True, "stopped": pid}
+        STATE.unlink(missing_ok=True)
+        return {"ok": True, "stopped": pid}
+    return {"ok": True, "stopped": 0, "foreign_state_ignored": bool(pid)}
 
 
 def ensure() -> dict:
     """Reuse a healthy instance, otherwise start one."""
-    state = load_state()
-    pid, url = int(state.get("pid") or 0), str(state.get("url") or "")
-    if pid and process_alive(pid) and url:
-        ok, detail = probe(url)
-        if ok:
-            return {"ok": True, "reused": True, **state, "probe": detail}
-    return start()
+    with startup_lock(DATA_ROOT / ".dsh-startup.lock", timeout=180):
+        state = load_state()
+        url = str(state.get("url") or "")
+        owned = owns_state(state)
+        compatible = (state.get("plugin_signature") == plugin_signature() and
+                      state.get("bridge_signature") == bridge_signature())
+        if owned and compatible and url:
+            ok, detail = probe(url)
+            if ok:
+                return {"ok": True, "reused": True, **state, "probe": detail}
+        if owned:
+            stop()
+        return start()
 
 
 def main() -> int:

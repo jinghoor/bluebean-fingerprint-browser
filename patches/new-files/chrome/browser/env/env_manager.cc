@@ -11,6 +11,7 @@
 #include "chrome/browser/env/automation_server.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/command_line.h"
+#include "base/unguessable_token.h"
 #include "base/auto_reset.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 
@@ -45,6 +46,9 @@
 #include "ui/display/screen.h"
 #include "ui/views/win/hwnd_util.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/navigation_throttle.h"
+#include "content/public/browser/navigation_throttle_registry.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/widget/widget.h"
 #include "content/public/browser/security_principal.h"
@@ -81,6 +85,23 @@ constexpr char kStateFileName[] = "envs.json";
 // A switch is a human action; polling this often is imperceptible and avoids
 // opening a socket just to accept commands.
 constexpr base::TimeDelta kCommandPollInterval = base::Milliseconds(250);
+
+class StartupCheckThrottle : public content::NavigationThrottle {
+ public:
+  explicit StartupCheckThrottle(content::NavigationThrottleRegistry& registry)
+      : content::NavigationThrottle(registry) {}
+  const char* GetNameForLogging() override { return "EnvironmentStartupCheck"; }
+  ThrottleCheckResult WillStartRequest() override { return Check(); }
+  ThrottleCheckResult WillRedirectRequest() override { return Check(); }
+  ThrottleCheckResult WillCommitWithoutUrlLoader() override { return Check(); }
+ private:
+  ThrottleCheckResult Check() {
+    auto* handle = navigation_handle();
+    auto* profile = Profile::FromBrowserContext(handle->GetWebContents()->GetBrowserContext());
+    return EnvManager::GetForProfile(profile)->BlockStartupNavigation(handle)
+               ? CANCEL_AND_IGNORE : PROCEED;
+  }
+};
 
 
 
@@ -158,6 +179,14 @@ bool EnvManager::UpsertEnv(const EnvProfile& spec, std::string* error) {
     return false;
   }
   if (EnvProfile* existing = FindMutableEnv(spec.env_id)) {
+    if (existing->proxy_config != spec.proxy_config && startup_gates_.contains(spec.env_id)) {
+      // The existing NetworkContext retains its old proxy until browser restart.
+      // Never validate the new proxy and then release pages using the old one.
+      startup_gates_.at(spec.env_id).unlocked = false;
+    } else if (existing->expected_exit_ip != spec.expected_exit_ip ||
+        existing->ip_mode != spec.ip_mode) {
+      startup_gates_.erase(spec.env_id);
+    }
     *existing = spec;
   } else {
     envs_.push_back(spec);
@@ -264,6 +293,7 @@ std::unique_ptr<content::WebContents> EnvManager::CreateTabForEnv(
   // http(s) start_url is safe for a different reason: the tab was created with
   // the partition already fixed, so a real navigation inherits it.
   GURL start(url::kAboutBlankURL);
+  EnsureStartupGate(spec);
   if (!spec.start_url.empty()) {
     GURL candidate(spec.start_url);
     // chrome:// (WebUI) is rejected here rather than at navigation time: see
@@ -277,10 +307,209 @@ std::unique_ptr<content::WebContents> EnvManager::CreateTabForEnv(
                  << spec.start_url;
     }
   }
+  if (StartupCheckBlocked(spec.env_id)) {
+    start = GURL(startup_gates_.at(spec.env_id).url);
+  }
   content::NavigationController::LoadURLParams load_params{start};
   load_params.transition_type = ui::PAGE_TRANSITION_AUTO_TOPLEVEL;
   contents->GetController().LoadURLWithParams(load_params);
   return contents;
+}
+
+int EnvManager::StartupCheckPort() const {
+  int port = 0;
+  base::StringToInt(base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+                       "lan-env-check-port"), &port);
+  return port > 0 && port <= 65535 ? port : 0;
+}
+
+void EnvManager::EnsureStartupGate(const EnvProfile& spec) {
+  if (!StartupCheckPort() || startup_gates_.contains(spec.env_id)) {
+    return;
+  }
+  StartupGate gate;
+  gate.key = base::UnguessableToken::Create().ToString();
+  gate.url = base::StringPrintf("http://127.0.0.1:%d/?env=%s&key=%s",
+      StartupCheckPort(), spec.env_id.c_str(), gate.key.c_str());
+  gate.proxy = spec.proxy_config;
+  gate.expected_ip = spec.expected_exit_ip;
+  gate.destination = !spec.start_url.empty() ? spec.start_url :
+      (!spec.homepage.empty() ? spec.homepage : kDefaultHomepage);
+  startup_gates_.emplace(spec.env_id, std::move(gate));
+}
+
+bool EnvManager::StartupCheckBlocked(const std::string& env_id) const {
+  if (!StartupCheckPort() || !FindEnv(env_id)) {
+    return false;
+  }
+  auto gate = startup_gates_.find(env_id);
+  return gate == startup_gates_.end() || !gate->second.unlocked;
+}
+
+// static
+void EnvManager::AddStartupCheckThrottle(content::NavigationThrottleRegistry& registry) {
+  if (!base::CommandLine::ForCurrentProcess()->HasSwitch("lan-env-check-port")) {
+    return;
+  }
+  auto& handle = registry.GetNavigationHandle();
+  if (handle.IsInPrimaryMainFrame() || handle.IsInPrerenderedMainFrame()) {
+    registry.AddThrottle(std::make_unique<StartupCheckThrottle>(registry));
+  }
+}
+
+bool EnvManager::BlockStartupNavigation(content::NavigationHandle* handle) {
+  content::WebContents* contents = handle->GetWebContents();
+  if (IsAssistantWebContents(contents) ||
+      IsAssistantAuxiliaryWebContents(contents)) {
+    return false;
+  }
+  std::string env_id = EnvIdOf(contents);
+  if (env_id.empty() && contents->GetOpener()) {
+    env_id = EnvIdOf(content::WebContents::FromRenderFrameHost(contents->GetOpener()));
+  }
+  if (env_id.empty()) {
+    // Browser-created tabs can navigate before insertion into the tab strip,
+    // before AdoptTabsIntoEnvironment has assigned their storage partition.
+    // Gate that first request too; only the actual assistant host is exempt.
+    env_id = active_env_id_;
+  }
+  if (!StartupCheckBlocked(env_id)) {
+    return false;
+  }
+  auto gate = startup_gates_.find(env_id);
+  if (gate != startup_gates_.end() &&
+      handle->GetURL().GetWithoutRef() == GURL(gate->second.url)) {
+    return false;
+  }
+  // Cancel before any request reaches the network, then restore the check page.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+      base::BindOnce(&EnvManager::ShowStartupCheck, weak_factory_.GetWeakPtr(), env_id));
+  return true;
+}
+
+void EnvManager::ShowStartupCheck(const std::string& env_id) {
+  const EnvProfile* spec = FindEnv(env_id);
+  if (!spec || !StartupCheckBlocked(env_id)) {
+    return;
+  }
+  EnsureStartupGate(*spec);
+  content::WebContents* contents = FindTabForEnv(env_id);
+  if (!contents) {
+    std::string error;
+    ActivateEnv(env_id, &error);
+    return;
+  }
+  const GURL url(startup_gates_.at(env_id).url);
+  if (contents->GetVisibleURL().GetWithoutRef() != url) {
+    content::NavigationController::LoadURLParams params{url};
+    contents->GetController().LoadURLWithParams(params);
+  }
+}
+
+void EnvManager::CloseStartupEnvironment(const std::string& env_id) {
+  BrowserWindowInterface* window = MainWindowIfReady();
+  TabStripModel* strip = window ? window->GetTabStripModel() : nullptr;
+  if (!strip) {
+    startup_gates_.erase(env_id);
+    return;
+  }
+  base::AutoReset<bool> synchronizing(&group_sync_in_progress_, true);
+  remember_tab_.erase(env_id);
+  if (active_env_id_ == env_id) {
+    active_env_id_.clear();
+  }
+  int count = 0;
+  for (int i = 0; i < strip->count(); ++i) {
+    if (EnvIdOf(strip->GetWebContentsAt(i)) == env_id) {
+      ++count;
+    }
+  }
+  if (count == strip->count()) {
+    content::WebContents::CreateParams params(profile_);
+    auto blank = content::WebContents::Create(params);
+    blank->GetController().LoadURL(GURL(url::kAboutBlankURL), content::Referrer(),
+                                  ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
+    strip->AddWebContents(std::move(blank), strip->count(),
+                         ui::PAGE_TRANSITION_AUTO_TOPLEVEL, AddTabTypes::ADD_ACTIVE);
+  }
+  for (int i = strip->count() - 1; i >= 0; --i) {
+    if (EnvIdOf(strip->GetWebContentsAt(i)) == env_id) {
+      strip->CloseWebContentsAt(i, TabCloseTypes::CLOSE_NONE);
+    }
+  }
+  startup_gates_.erase(env_id);
+  if (strip->GetActiveWebContents()) {
+    active_env_id_ = EnvIdOf(strip->GetActiveWebContents());
+  }
+  SaveToDisk();
+  observers_.Notify(&Observer::OnEnvsChanged);
+  observers_.Notify(&Observer::OnActiveEnvChanged, active_env_id_);
+}
+
+void EnvManager::HandleStartupCheck(const base::DictValue& command, std::string* result) {
+  base::DictValue out;
+  out.Set("ok", false);
+  const std::string id = command.FindString("env_id") ? *command.FindString("env_id") : "";
+  auto it = startup_gates_.find(id);
+  EnvProfile* spec = FindMutableEnv(id);
+  const std::string* key = command.FindString("key");
+  if (!spec || it == startup_gates_.end() || !key || *key != it->second.key) {
+    out.Set("error", "startup_check_expired");
+    base::JSONWriter::Write(out, result);
+    return;
+  }
+  StartupGate& gate = it->second;
+  const std::string action = command.FindString("action") ? *command.FindString("action") : "";
+  if (action == "inspect") {
+    out.Set("ok", true);
+    out.Set("env_id", id);
+    out.Set("display_name", spec->display_name);
+    out.Set("proxy", spec->proxy_config);
+    out.Set("expected_exit_ip", spec->expected_exit_ip);
+    out.Set("ip_mode", spec->ip_mode);
+    out.Set("unlocked", gate.unlocked);
+    out.Set("destination", gate.destination);
+    out.Set("restart_required", gate.proxy != spec->proxy_config);
+  } else if (action == "close") {
+    out.Set("ok", true);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(FROM_HERE,
+        base::BindOnce(&EnvManager::CloseStartupEnvironment, weak_factory_.GetWeakPtr(), id),
+        base::Milliseconds(150));
+  } else if (action == "unlock") {
+    const std::string* proxy = command.FindString("proxy");
+    const std::string* expected = command.FindString("expected_exit_ip");
+    const std::string decision = command.FindString("decision") ? *command.FindString("decision") : "";
+    if (!proxy || !expected || *proxy != spec->proxy_config || *expected != spec->expected_exit_ip ||
+        (decision != "pass" && decision != "continue_once" && decision != "dynamic" && decision != "baseline")) {
+      out.Set("error", "startup_check_configuration_changed");
+    } else {
+      if (decision == "dynamic") {
+        spec->ip_mode = "dynamic";
+      } else if (decision == "baseline") {
+        const std::string* ip = command.FindString("exit_ip");
+        if (!ip || ip->empty()) {
+          out.Set("error", "missing_exit_ip");
+          base::JSONWriter::Write(out, result);
+          return;
+        }
+        spec->expected_exit_ip = *ip;
+      }
+      gate.unlocked = true;
+      SaveToDisk();
+      observers_.Notify(&Observer::OnEnvsChanged);
+      out.Set("ok", true);
+      if (command.FindBool("navigate").value_or(false)) {
+        const std::string destination = gate.destination;
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+            base::BindOnce([](base::WeakPtr<EnvManager> manager, std::string env_id, std::string url) {
+              if (manager) { std::string error; manager->NavigateEnv(env_id, url, &error); }
+            }, weak_factory_.GetWeakPtr(), id, destination));
+      }
+    }
+  } else {
+    out.Set("error", "unknown_startup_check_action");
+  }
+  base::JSONWriter::Write(out, result);
 }
 
 bool EnvManager::NewTab(const std::string& env_id,
@@ -289,6 +518,11 @@ bool EnvManager::NewTab(const std::string& env_id,
   const EnvProfile* existing = FindEnv(env_id);
   if (!existing) {
     *error = "unknown environment: " + env_id;
+    return false;
+  }
+  if (StartupCheckBlocked(env_id) || (StartupCheckPort() && !startup_gates_.contains(env_id))) {
+    ShowStartupCheck(env_id);
+    *error = "environment_startup_check_required";
     return false;
   }
   // A copy: CreateTabForEnv does not touch `envs_`, and the caller's pointer must not be
@@ -338,6 +572,11 @@ bool EnvManager::NavigateEnv(const std::string& env_id,
                              const std::string& url,
                              std::string* error) {
   GURL target(url);
+  if (StartupCheckBlocked(env_id)) {
+    ShowStartupCheck(env_id);
+    *error = "environment_startup_check_required";
+    return false;
+  }
   if (!target.is_valid()) {
     *error = "invalid url: " + url;
     return false;
@@ -423,11 +662,18 @@ BrowserWindowInterface* EnvManager::EnsureMainWindow() {
   }
   // The main window is the one that already holds an environment tab; otherwise create it.
   BrowserWindowInterface* main_window = nullptr;
+  BrowserWindowInterface* initial_window = nullptr;
   collection->ForEach(
       [&](BrowserWindowInterface* window) {
         TabStripModel* strip = window->GetTabStripModel();
         if (!strip) {
           return true;
+        }
+        // The product opens before the user creates any environments. Reuse
+        // that window so first activation preserves its assistant and tabs.
+        if (!initial_window && strip->count() > 0 && window->GetWindow() &&
+            window->GetWindow()->IsVisible()) {
+          initial_window = window;
         }
         for (int i = 0; i < strip->count(); ++i) {
           content::WebContents* contents = strip->GetWebContentsAt(i);
@@ -439,6 +685,9 @@ BrowserWindowInterface* EnvManager::EnsureMainWindow() {
         return true;
       },
       BrowserCollection::Order::kCreation);
+  if (!main_window) {
+    main_window = initial_window;
+  }
   if (main_window) {
     // A window that was hidden in an earlier session is restored parked off screen; if it does not
     // overlap the work area, put it back where the canonical rect says.
@@ -728,6 +977,13 @@ void EnvManager::SynchronizeEnvGroups() {
     return;
   }
   base::AutoReset<bool> synchronizing(&group_sync_in_progress_, true);
+  for (auto it = startup_gates_.begin(); it != startup_gates_.end();) {
+    if (!FindTabForEnv(it->first)) {
+      it = startup_gates_.erase(it);
+    } else {
+      ++it;
+    }
+  }
   // Native close/keyboard selection may select a different environment. Keep the
   // sidebar and group visibility consistent with the page actually on screen.
   content::WebContents* selected = strip->GetActiveWebContents();
@@ -865,6 +1121,14 @@ void EnvManager::AttachToStrip(TabStripModel* strip) {
   if (!strip || observed_strip_ == strip) {
     return;
   }
+  // Browser::OnTabInsertedAt also runs for the assistant's authorization
+  // popup. Do not replace the main window's observation with a short-lived
+  // login strip (it is destroyed on cancel and would leave a dangling pointer).
+  for (int i = 0; i < strip->count(); ++i) {
+    if (IsAssistantAuxiliaryWebContents(strip->GetWebContentsAt(i))) {
+      return;
+    }
+  }
   if (observed_strip_) {
     observed_strip_->RemoveObserver(this);
   }
@@ -889,7 +1153,8 @@ void EnvManager::OnTabStripModelChanged(
   for (const TabStripModelChange::ContentsWithIndex& inserted :
        change.GetInsert()->contents) {
     content::WebContents* contents = inserted.contents;
-    if (!contents || !EnvIdOf(contents).empty()) {
+    if (!contents || !EnvIdOf(contents).empty() ||
+        IsAssistantAuxiliaryWebContents(contents)) {
       continue;
     }
     // chrome:// pages stay where they are: WebUI needs the default partition and
@@ -931,6 +1196,11 @@ void EnvManager::AdoptTabs() {
     int index = strip->GetIndexOfWebContents(contents);
     if (index == TabStripModel::kNoTab) {
       continue;  // closed in the meantime
+    }
+    if (StartupCheckBlocked(env_id) && strip->count() > 1) {
+      strip->CloseWebContentsAt(index, TabCloseTypes::CLOSE_NONE);
+      ShowStartupCheck(env_id);
+      continue;
     }
     if (!EnvIdOf(contents).empty()) {
       continue;  // already belongs to an environment
@@ -1113,6 +1383,7 @@ std::string EnvManager::DescribeStateJson() const {
     d.Set("partition", e.PartitionName());
     d.Set("proxy", e.proxy_config);
     d.Set("expected_exit_ip", e.expected_exit_ip);
+    d.Set("ip_mode", e.ip_mode);
     d.Set("start_url", e.start_url);
     d.Set("homepage", e.homepage);
     d.Set("fingerprint_seed", e.fingerprint_seed);
@@ -1234,6 +1505,9 @@ void EnvManager::LoadFromDisk() {
     if (const std::string* v = d.FindString("expected_exit_ip")) {
       e.expected_exit_ip = *v;
     }
+    if (const std::string* v = d.FindString("ip_mode")) {
+      e.ip_mode = *v == "dynamic" ? "dynamic" : "static";
+    }
 
     if (const std::string* v = d.FindString("locale")) {
       e.locale = *v;
@@ -1262,6 +1536,7 @@ void EnvManager::SaveToDisk() const {
     d.Set("homepage", e.homepage);
     d.Set("fingerprint_seed", e.fingerprint_seed);
     d.Set("expected_exit_ip", e.expected_exit_ip);
+    d.Set("ip_mode", e.ip_mode);
     d.Set("locale", e.locale);
     d.Set("accept_languages", e.accept_languages);
     d.Set("used", e.used);
@@ -1390,6 +1665,11 @@ void EnvManager::HandleCommand(const std::string& json, std::string* result) {
   const std::string* command = d.FindString("command");
   if (!command) {
     *result = "{\"ok\":false,\"error\":\"missing command\"}";
+    return;
+  }
+
+  if (*command == "startup-check") {
+    HandleStartupCheck(d, result);
     return;
   }
 
@@ -1666,6 +1946,9 @@ void EnvManager::HandleCommand(const std::string& json, std::string* result) {
     if (const std::string* v = d.FindString("expected_exit_ip")) {
       spec.expected_exit_ip = *v;
     }
+    if (const std::string* v = d.FindString("ip_mode")) {
+      spec.ip_mode = *v == "dynamic" ? "dynamic" : "static";
+    }
     if (const std::string* v = d.FindString("locale")) {
       spec.locale = *v;
     }
@@ -1746,8 +2029,23 @@ void EnvManager::HandleCommand(const std::string& json, std::string* result) {
   if (*command == "overlay") {
     ProfileBrowserCollection* overlay_collection =
         ProfileBrowserCollection::GetForProfile(profile_);
+    // Authorization owns a separate foreground window. Bridge hide/show/query
+    // must still address the existing assistant, also before any environment
+    // has been created; the last active browser may be that login popup.
     BrowserWindowInterface* window =
-        overlay_collection ? overlay_collection->GetLastActiveBrowser() : nullptr;
+        MainWindowIfReady();
+    if (!window && overlay_collection) {
+      overlay_collection->ForEach([&](BrowserWindowInterface* candidate) {
+        if (env::OverlayGeometry(candidate) != "none") {
+          window = candidate;
+          return false;
+        }
+        return true;
+      });
+    }
+    if (!window && overlay_collection) {
+      window = overlay_collection->GetLastActiveBrowser();
+    }
     if (!window) {
       *result = R"({"ok":false,"error":"no window"})";
       return;
@@ -1764,6 +2062,17 @@ void EnvManager::HandleCommand(const std::string& json, std::string* result) {
     std::string mode;
     if (const std::string* v = d.FindString("mode")) {
       mode = *v;
+    }
+    if (mode == "refresh") {
+      const std::string* requested = d.FindString("url");
+      const GURL candidate(requested ? *requested : "");
+      const bool refreshed = candidate.is_valid() && env::RefreshOverlay(window, candidate);
+      base::DictValue out;
+      out.Set("ok", candidate.is_valid());
+      out.Set("refreshed", refreshed);
+      out.Set("visible", env::OverlayVisible(window));
+      base::JSONWriter::Write(out, result);
+      return;
     }
     // A URL in the payload re-points the layer first: the workbench picks a new port on every restart, and a mode request
     // that ignored it left the layer showing the dead one.

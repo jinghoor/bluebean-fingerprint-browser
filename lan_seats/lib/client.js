@@ -20,6 +20,50 @@ window.__ModuleLoader__.load({
 
     const BASE = 'http://127.0.0.1:8799';
     const TOKEN = '__BLUEBEAN_BRIDGE_TOKEN_INJECTED_AT_RUNTIME__';
+    const BLUEBEAN_VERSION = '1.0.4'; // Synchronized with bluebean_version.VERSION at runtime.
+
+    function ProductInfo() {
+      return h('div', { 'data-lan-product-info': '', style: { display: 'grid', gap: 5, fontSize: 12, lineHeight: '18px', userSelect: 'text' } },
+        h('div', { style: { fontWeight: 600, color: 'var(--dsw-alias-text-primary,inherit)' } }, '蓝豆指纹浏览器 v' + BLUEBEAN_VERSION),
+        h('div', { style: { color: 'var(--dsw-alias-text-secondary,#687386)', overflowWrap: 'anywhere' } }, '作者：277030704@qq.com'));
+    }
+
+    function installProductInfo(ctx) {
+      // The account launcher owns a fixed menu with no additive slot. Add only
+      // passive information to that menu; keep its native actions and focus order.
+      ctx.effect(() => {
+        let queued = 0;
+        const decorate = () => {
+          queued = 0;
+          for (const menu of document.querySelectorAll('[role="menu"]')) {
+            if (!menu.querySelector('[role="menuitem"][aria-keyshortcuts="Control+Alt+,"]') || menu.querySelector('[data-lan-product-menu-info]')) continue;
+            const footer = document.createElement('div');
+            footer.setAttribute('data-lan-product-menu-info', '');
+            footer.style.cssText = 'display:grid;gap:5px;margin:6px 6px 2px;padding:10px 8px 6px;border-top:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2));font-size:12px;line-height:18px;user-select:text;min-width:220px;max-width:calc(100vw - 60px);box-sizing:border-box';
+            const title = document.createElement('div');
+            title.textContent = '蓝豆指纹浏览器 v' + BLUEBEAN_VERSION;
+            title.style.fontWeight = '600';
+            const author = document.createElement('div');
+            author.textContent = '作者：277030704@qq.com';
+            author.style.cssText = 'color:var(--dsw-alias-text-secondary,#687386);overflow-wrap:anywhere';
+            footer.append(title, author);
+            (menu.querySelector('[role="presentation"]') || menu).append(footer);
+          }
+        };
+        const observer = new MutationObserver(() => { if (!queued) queued = requestAnimationFrame(decorate); });
+        // DSH portals this menu directly into body. Avoid observing chat/message
+        // changes; only portal mount/unmount needs decoration.
+        observer.observe(document.body, { childList: true });
+        decorate();
+        return () => {
+          observer.disconnect();
+          if (queued) cancelAnimationFrame(queued);
+          document.querySelectorAll('[data-lan-product-menu-info]').forEach(node => node.remove());
+        };
+      }, 'lan-seats: product information in account settings menu');
+      ctx.slots.inject('settings.general.item', () => ctx.slots.register(
+        { name: 'settings.general.item', id: 'bluebean-product-info', order: 1000 }, ProductInfo));
+    }
 
     async function call(path, body) {
       const response = await fetch(`${BASE}${path}`, {
@@ -32,6 +76,10 @@ window.__ModuleLoader__.load({
     }
 
     const MANAGE = '/v1/lan/manage/';
+    // Reuse the management page's successful list read in the sidebar. Saving,
+    // editing or removing an environment must not require toggling the sidebar
+    // or starting another round of browser/proxy detection.
+    const environmentCatalogEvents = new EventTarget();
     const UNKNOWN_STATUS={state:'unknown',label:'状态未知',network:'unchecked'};
     // A single lightweight poll is shared by both visible environment views.
     const runtimeStatus=(()=>{
@@ -124,9 +172,9 @@ window.__ModuleLoader__.load({
       return img;
     }
     const CONFIG_FIELDS = ['env_id', 'display_name', 'group', 'tags', 'notes', 'proxy', 'expected_exit_ip',
-      'locale', 'accept_languages', 'fingerprint_seed', 'start_url', 'homepage'];
+      'locale', 'accept_languages', 'fingerprint_seed', 'start_url', 'homepage', 'ip_mode'];
     const LABELS = { env_id: '环境编号', display_name: '环境名称', group: '分组', tags: '标签', notes: '备注',
-      proxy: '代理地址', expected_exit_ip: '预期出口 IP', locale: '区域设置', accept_languages: '请求语言',
+      ip_mode: 'IP 模式', proxy: '代理地址', expected_exit_ip: '预期出口 IP', locale: '区域设置', accept_languages: '请求语言',
       fingerprint_seed: '指纹种子', start_url: '首次启动页面', homepage: '新标签页主页',
       platform: '平台/站点', label: '账号备注', username: '账号名称', password: '更新密码', otp_secret: '更新 OTP 密钥' };
     const emptyAccount = () => ({ platform: '', label: '', username: '', password: '', otp_secret: '' });
@@ -145,7 +193,7 @@ window.__ModuleLoader__.load({
         return restored;
       } catch { return { ...viewDefaults }; }
     };
-    const configOf = row => Object.fromEntries(CONFIG_FIELDS.map(key => [key, row?.[key] || '']));
+    const configOf = row => Object.fromEntries(CONFIG_FIELDS.map(key => [key, row?.[key] || (key==='ip_mode'?'static':'')]));
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     const dateLabel = seconds => seconds ? new Date(seconds * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
     const proxyStatus = env => ['', 'direct', 'system'].includes(env.proxy) ? '无需检测' :
@@ -219,7 +267,10 @@ window.__ModuleLoader__.load({
             const reply = await call(MANAGE + 'list');
             if (!reply.ok) throw new Error(reply.error || '连接失败');
             if (reply.api_version !== 2) throw new Error('管理服务版本不兼容，请升级本地桥接服务');
-            if (live.current) setState({ ...reply, error: '', loading: false });
+            if (live.current) {
+              setState({ ...reply, error: '', loading: false });
+              environmentCatalogEvents.dispatchEvent(new CustomEvent('updated', { detail: reply }));
+            }
             return reply;
           } catch (err) {
             if (live.current) setState(old => ({ ...old, loading: false, error: String(err.message || err) }));
@@ -230,17 +281,74 @@ window.__ModuleLoader__.load({
       }, []);
       React.useEffect(() => {
         live.current = true;
-        let timer, stopped = false, failures = 0;
+        let timer, stopped = false, failures = 0, polling = false;
         const poll = async () => {
+          clearTimeout(timer);
+          if (stopped || document.hidden || polling) return;
+          polling = true;
           const reply = await refresh();
+          polling = false;
           failures = reply.ok ? 0 : failures + 1;
-          const delay = reply.live_status === 'connecting' ? 1000 : reply.live_status === 'offline' ? 5000 : Math.min(15000, 3000 * (1 + failures));
-          if (!stopped) timer = setTimeout(poll, document.hidden ? 15000 : delay);
+          // Runtime indicators have their own shared lightweight status feed.
+          // Read the full catalog less often; actions still refresh immediately.
+          const delay = reply.ok && reply.live_status === 'connecting' ? 2000 : Math.min(30000, 15000 * (1 + failures));
+          if (!stopped && !document.hidden) timer = setTimeout(poll, delay);
         };
+        const onVisibility = () => { clearTimeout(timer); if (!document.hidden) poll(); };
+        document.addEventListener('visibilitychange', onVisibility);
         poll();
-        return () => { stopped = true; live.current = false; clearTimeout(timer); };
+        return () => { stopped = true; live.current = false; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibility); };
       }, [refresh]);
       return [state, refresh];
+    }
+
+    async function copyLocalCredential(value) {
+      try { await navigator.clipboard.writeText(value); }
+      catch {
+        const field=document.createElement('textarea');field.value=value;field.style.cssText='position:fixed;left:-9999px;top:0';document.body.appendChild(field);
+        try{field.select();if(!document.execCommand('copy'))throw Error('复制失败，请手动复制');}finally{field.value='';field.remove();}
+      }
+    }
+    function AccountCredentials({account,envId}) {
+      const [password,setPassword]=React.useState(null),[passwordBusy,setPasswordBusy]=React.useState(false);
+      const [otp,setOtp]=React.useState(null),[seconds,setSeconds]=React.useState(0),[message,setMessage]=React.useState('');
+      const guard=React.useRef({live:false,generation:0}),passwordTimer=React.useRef(null),otpAction=React.useRef(null);
+      const requestAccount=async(action)=>{const r=await call(MANAGE+'accounts',{env_id:envId,account_id:account.account_id,action,...(action==='credential'?{field:'password'}:{})});if(!r.ok)throw Error(r.error||'读取失败，请重试');return r;};
+      const hidePassword=()=>{guard.current.generation++;clearTimeout(passwordTimer.current);setPassword(null);setPasswordBusy(false);};
+      React.useEffect(()=>{
+        let stopped=false,loading=false,deadline=0,failed=false,otpGeneration=0;
+        guard.current.live=true;
+        const load=async()=>{
+          if(stopped||loading||document.hidden||!account.has_otp)return;
+          loading=true;const generation=otpGeneration;
+          try{const r=await requestAccount('totp');if(stopped||document.hidden||generation!==otpGeneration)return;
+            deadline=performance.now()+Math.max(0,r.expires_at-(r.server_time||Date.now()/1000))*1000;
+            failed=false;setOtp({code:r.code,deadline});setSeconds(Math.max(0,Math.ceil((deadline-performance.now())/1000)));
+          }catch(e){if(!stopped&&generation===otpGeneration){failed=true;setOtp({error:e.message});}}finally{loading=false;}
+        };
+        otpAction.current=load;
+        const tick=()=>{if(document.hidden||stopped)return;const remaining=Math.max(0,Math.ceil((deadline-performance.now())/1000));setSeconds(remaining);if(!remaining&&!failed){setOtp(null);load();}};
+        const visibility=()=>{hidePassword();if(document.hidden){otpGeneration++;setOtp(null);deadline=0;}else{failed=false;load();}};
+        const blur=()=>hidePassword();
+        document.addEventListener('visibilitychange',visibility);window.addEventListener('blur',blur);
+        if(account.has_otp)load();
+        const timer=account.has_otp?setInterval(tick,1000):null;
+        return()=>{stopped=true;guard.current.live=false;guard.current.generation++;clearInterval(timer);clearTimeout(passwordTimer.current);otpAction.current=null;document.removeEventListener('visibilitychange',visibility);window.removeEventListener('blur',blur);};
+      },[envId,account.account_id,account.revision,account.has_otp]);
+      const reveal=async()=>{
+        if(password){hidePassword();return;}if(passwordBusy)return;
+        const generation=guard.current.generation;setPasswordBusy(true);setMessage('');
+        try{const r=await requestAccount('credential');if(!guard.current.live||generation!==guard.current.generation||document.hidden)return;
+          const deadline=performance.now()+Math.min(15000,Math.max(0,(r.expires_at||Date.now()/1000+15)-(r.server_time||Date.now()/1000))*1000);
+          setPassword({value:r.value,deadline});passwordTimer.current=setTimeout(hidePassword,Math.max(1,deadline-performance.now()));
+        }catch(e){if(guard.current.live&&generation===guard.current.generation)setMessage(e.message);}finally{if(guard.current.live&&generation===guard.current.generation)setPasswordBusy(false);}
+      };
+      const copy=async(value,label)=>{try{await copyLocalCredential(value);if(guard.current.live)setMessage(label+'已复制');}catch(e){if(guard.current.live)setMessage(e.message);}};
+      return h('section',{className:'lm-section lm-credentials','aria-label':'本机账号凭据'},h('h3',null,'本机凭据'),
+        h('div',{className:'lm-credential-row'},h('span',null,'密码'),h('code',{className:'lm-password','data-password-value':true},password?.value||(account.has_password?'••••••••':'未保存')),
+          account.has_password&&h('div',{className:'lm-actions'},h('button',{type:'button',onClick:reveal,disabled:passwordBusy},password?'隐藏密码':passwordBusy?'读取中…':'查看密码'),h('button',{type:'button',disabled:!password,onClick:()=>{if(password?.deadline>performance.now())copy(password.value,'密码');else hidePassword();}},'复制密码'))),
+        h('div',{className:'lm-credential-row'},h('span',null,'2FA'),account.has_otp?h(React.Fragment,null,h('button',{type:'button',className:'lm-otp-code',disabled:!otp?.code||seconds<=0,onClick:()=>{if(otp?.deadline>performance.now()+500)copy(otp.code,'验证码');else otpAction.current?.();}},otp?.code&&seconds>0?otp.code:'······'),h('span',{className:'lm-muted'},otp?.error?'生成失败':seconds>0?seconds+' 秒后更新':'正在更新…'),otp?.error&&h('button',{type:'button',onClick:()=>otpAction.current?.()},'重试')):h('span',{className:'lm-muted'},'未设置')),
+        h('p',{className:'lm-muted'},'密码默认隐藏，显示后 15 秒自动隐藏。2FA 自动更新，点击验证码即可复制。'),message&&h('p',{className:'lm-notice',role:'status'},message));
     }
 
     function AccountFields({value,onChange,platforms,onRemove}) {
@@ -348,7 +456,7 @@ window.__ModuleLoader__.load({
       const [accounts,setAccounts]=React.useState([]),[drafts,setDrafts]=React.useState([]),[proxyResult,setProxyResult]=React.useState(null),[errors,setErrors]=React.useState({});
       const [maintenance,setMaintenance]=React.useState(null),[restore,setRestore]=React.useState(null),[restoreSource,setRestoreSource]=React.useState(null),[restoreIds,setRestoreIds]=React.useState([]);
       const [results,setResults]=React.useState([]),[job,setJob]=React.useState(null),[jobFilter,setJobFilter]=React.useState(false);
-      const [savedDraft,setSavedDraft]=React.useState(null),[draftLoaded,setDraftLoaded]=React.useState(false),[draftPrompt,setDraftPrompt]=React.useState(false),[versions,setVersions]=React.useState(null),[secret,setSecret]=React.useState(null);
+      const [savedDraft,setSavedDraft]=React.useState(null),[draftLoaded,setDraftLoaded]=React.useState(false),[draftPrompt,setDraftPrompt]=React.useState(false),[versions,setVersions]=React.useState(null);
       const pendingNewEnvironment=React.useRef(false);
       const [transferPassword,setTransferPassword]=React.useState(''),[transfer,setTransfer]=React.useState(null),[transferPreview,setTransferPreview]=React.useState(null);
       const [bulkGroup,setBulkGroup]=React.useState(''),[bulkTags,setBulkTags]=React.useState(''),[manualCodes,setManualCodes]=React.useState({}),[conflict,setConflict]=React.useState(null);
@@ -374,9 +482,8 @@ window.__ModuleLoader__.load({
       React.useEffect(()=>{try{localStorage.setItem('lm-workspace-view',JSON.stringify(view));}catch{}},[view]);
       React.useEffect(()=>{if(!form&&!drafts.length)return;clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>enqueueDraft('save',{draft:draftValue()}).catch(()=>setNotice('草稿未保存，请保持当前页面并重试')),500);return()=>clearTimeout(draftTimer.current);},[form,drafts]);
       React.useEffect(()=>{if(!form&&!drafts.length)return;const f=e=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',f);return()=>window.removeEventListener('beforeunload',f);},[!!form,drafts.length]);
-      React.useEffect(()=>{if(!secret)return;const t=setTimeout(()=>setSecret(null),Math.max(1,secret.expires_at*1000-Date.now()));return()=>clearTimeout(t);},[secret]);
       React.useEffect(()=>{if(!job||!['running','cancelling'].includes(job.status))return;let stop=false,t;const poll=async()=>{try{const r=await request('proxy-job',{job_id:job.id});if(!stop){if(!r.job)setNotice('上次检测记录已过期，可重新检测');setJob(r.job);if(r.job&&['running','cancelling'].includes(r.job.status))t=setTimeout(poll,700);else refresh();}}catch{if(!stop){setNotice('检测状态暂时断开，正在重连，不会重复提交检测');t=setTimeout(poll,2000);}}};t=setTimeout(poll,500);return()=>{stop=true;clearTimeout(t);};},[job?.id,job?.status]);
-      const goto=(next,env)=>run('navigate',async()=>{rememberScroll();await flushDraft();if(form||drafts.length)setSavedDraft(draftValue());setForm(null);setDrafts([]);setTab(next);setDataSection('');setProxyDetail(false);setFingerprintEnv('');setFingerprintData(null);setAccountDetail('');setAccountEditing(false);setEnvDetail('');setResults([]);setSecret(null);if(env)setFocusEnv(env);if(next==='data')await loadMaintenance();});
+      const goto=(next,env)=>run('navigate',async()=>{rememberScroll();await flushDraft();if(form||drafts.length)setSavedDraft(draftValue());setForm(null);setDrafts([]);setTab(next);setDataSection('');setProxyDetail(false);setFingerprintEnv('');setFingerprintData(null);setAccountDetail('');setAccountEditing(false);setEnvDetail('');setResults([]);if(env)setFocusEnv(env);if(next==='data')await loadMaintenance();});
       const freshAccount=()=>({client_id:crypto.randomUUID(),platform_id:'',login:'',username:'',url:'',password_action:'keep',otp_secret_action:'keep'});
       const beginEditor=(env,copy=false)=>{editorReturn.current={tab,envDetail,dataSection,proxyDetail};const f=env?{...configOf(env),revision:env.revision}:{...configOf({}),env_id:'env-'+crypto.randomUUID().slice(0,8),proxy:'direct'};if(copy){let i=1,name;do{name=env.display_name+' 副本'+(i===1?'':' '+i);i++;}while(state.envs.some(e=>e.display_name===name));f.env_id='env-'+crypto.randomUUID().slice(0,8);f.display_name=name;f.fingerprint_seed='';delete f.revision;}setEditorSection('basic');setForm(f);setInitial(f);setEditing(!!env&&!copy);setDrafts([]);setErrors({});setProxyResult(null);setConflict(null);setNotice(copy?'已复制配置，代理仍沿用来源。账号、网站登录数据和原指纹不会复制。':'');if(content.current)content.current.scrollTop=0;};
       const begin=(env,copy=false)=>run('editor',async()=>{rememberScroll();await flushDraft();beginEditor(env,copy);});
@@ -388,7 +495,7 @@ window.__ModuleLoader__.load({
       const save=async open=>{setErrors({});const r=await request('save',{...form,create_only:!editing,allow_duplicate_name:!!form.allow_duplicate_name});setEditing(true);setInitial({...form,revision:r.revision});setForm({...form,revision:r.revision});let testWarning='';if(proxyResult?.proxy===form.proxy){try{await request('proxy-attach',{env_id:form.env_id,receipt:proxyResult.receipt});}catch{testWarning='；检测记录未关联，请在代理页重新检测';}}const accountOk=await saveAccounts(form.env_id);if(!accountOk){setEditorSection('accounts');setNotice('环境已保存；部分账号未保存，请修正后重试失败项。');await refresh();return;}const env=form.env_id;setView({sort:'updated'});setPage(0);setFocusEnv(env);setEnvDetail(env);setTab('envs');setProxyDetail(false);setDataSection('');setForm(null);setDrafts([]);setSavedDraft(null);clearTimeout(draftTimer.current);await enqueueDraft('clear');await refresh();setNotice((r.restart_required?.length?'已保存，网络或浏览器身份变更需重启蓝豆浏览器后完整生效。':'环境和账号已保存')+testWarning);if(r.warning)setNotice(r.warning);if(open)await request('open',{env_id:env});};
       const input=(key,label,wide=false)=>h('label',{className:'lm-field'+(wide?' lm-wide':'')},h('span',null,label),h(key==='notes'?'textarea':'input',{name:key,value:form?.[key]||'',disabled:!!busy,onChange:e=>{setForm({...form,[key]:e.target.value});setErrors({...errors,[key]:''});if(['proxy','expected_exit_ip'].includes(key))setProxyResult(null);},'aria-invalid':!!errors[key]}),errors[key]&&h('small',{role:'alert',className:'lm-error'},errors[key]));
       const select=(label,value,fn,opts)=>h('label',{className:'lm-field'},h('span',null,label),h('select',{'aria-label':label,value,onChange:e=>fn(e.target.value)},...opts.map(([v,t])=>h('option',{key:v,value:v},t))));
-      const envPicker=select('选择环境',focusEnv,v=>{setAccountDetail('');setSecret(null);if(drafts.length){setNotice('请先保存或取消当前账号编辑，再切换环境');return;}setAccounts([]);setFocusEnv(v);setResults([]);},state.envs.map(e=>[e.env_id,e.display_name+' · '+e.env_id]));
+      const envPicker=select('选择环境',focusEnv,v=>{setAccountDetail('');if(drafts.length){setNotice('请先保存或取消当前账号编辑，再切换环境');return;}setAccounts([]);setFocusEnv(v);setResults([]);},state.envs.map(e=>[e.env_id,e.display_name+' · '+e.env_id]));
       const download=(value,name)=>{const u=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);};
       const file=(label,fn)=>h('label',{className:'lm-file'},h('span',null,label),h('input',{type:'file',accept:'.json,application/json',onChange:e=>{const f=e.target.files?.[0];if(f)run('import',async()=>{if(f.size>4*1024*1024)throw Error('文件不能超过 4MB');await fn(JSON.parse(await f.text()));});e.target.value='';}}));
       const startJob=ids=>run('inspection',async()=>{const rid=crypto.randomUUID();let r;try{r=await request('proxy-job',{action:'start',env_ids:ids,request_id:rid});}catch(e){const recovered=await request('proxy-job');if(recovered.job?.request_id===rid||e.reply?.job)r={job:e.reply?.job||recovered.job};else throw e;}setJob(r.job);setProxyDetail(true);setTab('proxy');});
@@ -406,8 +513,8 @@ window.__ModuleLoader__.load({
         subnav('环境设置分类',[['basic','基本信息'],['network','网络代理'],['browser','浏览器设置'],['accounts','平台账号']],editorSection,setEditorSection),
         conflict&&h('section',{className:'lm-notice'},h('h3',null,'此环境已在其他页面更新'),h('p',null,'当前输入保留。请比较双方修改后选择：'),h('dl',null,...CONFIG_FIELDS.filter(k=>form[k]!==conflict[k]).flatMap(k=>[h('dt',{key:k},LABELS[k]),h('dd',{key:k+'v'},'本次：'+(form[k]||'空')+'；最新：'+(conflict[k]||'空'))])),btn('保留我的修改，合并最新配置',()=>{const merged={...configOf(conflict),revision:conflict.revision};for(const k of CONFIG_FIELDS)if(form[k]!==initial[k])merged[k]=form[k];setInitial(conflict);setForm(merged);setConflict(null);}),btn('使用最新配置',()=>{setForm({...configOf(conflict),revision:conflict.revision});setInitial(conflict);setConflict(null);})),
         editorSection==='basic'&&h('section',{className:'lm-section'},h('div',{className:'lm-grid'},input('display_name','环境名称 *'),input('group','分组'),input('tags','标签（逗号分隔）'),input('notes','备注')),h('p',{className:'lm-muted','data-env-id':form.env_id},'环境编号：'+form.env_id),h('label',{className:'lm-check'},h('input',{type:'checkbox',checked:!!form.allow_duplicate_name,onChange:e=>setForm({...form,allow_duplicate_name:e.target.checked})}),'允许与其他环境同名')),
-        editorSection==='network'&&h('section',{className:'lm-section'},h('h3',null,'网络代理'),h('div',{className:'lm-grid'},select('连接方式',proxyParts.type,v=>proxyChange('type',v),[['direct','直接连接'],['system','跟随系统'],['http','HTTP'],['https','HTTPS'],['socks5','SOCKS5'],['socks4','SOCKS4']]),!['direct','system'].includes(proxyParts.type)&&h(React.Fragment,null,h('label',{className:'lm-field'},h('span',null,'服务器地址'),h('input',{name:'proxy.host',value:proxyParts.host,onChange:e=>proxyChange('host',e.target.value)})),h('label',{className:'lm-field'},h('span',null,'端口'),h('input',{name:'proxy.port',value:proxyParts.port,onChange:e=>proxyChange('port',e.target.value)})),input('expected_exit_ip','预期出口 IP（选填）'))),
-          h('details',null,h('summary',null,'直接粘贴代理地址'),input('proxy','完整代理地址',true)),btn('测试当前代理',()=>run('proxy',async()=>setProxyResult(await call(MANAGE+'proxy-test',{proxy:form.proxy,expected_exit_ip:form.expected_exit_ip})))),proxyResult&&h('p',{role:'status'},(proxyResult.ok?'通过 · ':'失败 · ')+(proxyResult.exit_ip||proxyResult.error)+(proxyResult.exit_ip?' · 延迟 '+(proxyResult.latency_ms??'—')+' ms · '+[proxyResult.city,proxyResult.region,proxyResult.country].filter(Boolean).join('、')+' · '+(proxyResult.timezone||'时区未知')+' · '+(proxyResult.org||proxyResult.asn||'运营商未知')+(proxyResult.geo_error?' · '+proxyResult.geo_error:''):'')+'；保存环境时关联本次结果'),h('p',{className:'lm-muted'},'延迟为代理 HTTPS 出口查询往返时间；城市、时区和网络归属按出口 IP 查询。')),
+        editorSection==='network'&&h('section',{className:'lm-section'},h('h3',null,'网络代理'),h('div',{className:'lm-grid'},select('连接方式',proxyParts.type,v=>proxyChange('type',v),[['direct','直接连接'],['system','跟随系统'],['http','HTTP'],['https','HTTPS'],['socks5','SOCKS5'],['socks4','SOCKS4']]),!['direct','system'].includes(proxyParts.type)&&h(React.Fragment,null,h('label',{className:'lm-field'},h('span',null,'服务器地址'),h('input',{name:'proxy.host',value:proxyParts.host,onChange:e=>proxyChange('host',e.target.value)})),h('label',{className:'lm-field'},h('span',null,'端口'),h('input',{name:'proxy.port',value:proxyParts.port,onChange:e=>proxyChange('port',e.target.value)})),input('expected_exit_ip','预期出口 IP（选填）'),select('IP 模式',form.ip_mode||'static',v=>setForm({...form,ip_mode:v}),[['static','静态 IP：启动时核对出口'],['dynamic','动态 IP：不提示出口变化']])) ),
+          h('details',null,h('summary',null,'直接粘贴代理地址'),input('proxy','完整代理地址',true)),btn('测试当前代理',()=>run('proxy',async()=>setProxyResult(await call(MANAGE+'proxy-test',{proxy:form.proxy,expected_exit_ip:form.expected_exit_ip,ip_mode:form.ip_mode})))),proxyResult&&h('p',{role:'status'},(proxyResult.ok?'通过 · ':'失败 · ')+(proxyResult.exit_ip||proxyResult.error)+(proxyResult.exit_ip?' · 延迟 '+(proxyResult.latency_ms??'—')+' ms · '+[proxyResult.city,proxyResult.region,proxyResult.country].filter(Boolean).join('、')+' · '+(proxyResult.timezone||'时区未知')+' · '+(proxyResult.org||proxyResult.asn||'运营商未知')+(proxyResult.geo_error?' · '+proxyResult.geo_error:''):'')+'；保存环境时关联本次结果'),h('p',{className:'lm-muted'},'延迟为代理 HTTPS 出口查询往返时间；城市、时区和网络归属按出口 IP 查询。')),
         editorSection==='browser'&&h('section',{className:'lm-section'},h('h3',null,'浏览器设置'),h('div',{className:'lm-grid'},input('start_url','首次打开页面'),input('homepage','新标签页地址'),input('locale','区域语言，例如 zh-CN'),input('accept_languages','网页请求语言，例如 zh-CN,zh'),input('fingerprint_seed','指纹种子（默认自动生成）')),h('p',{className:'lm-muted'},'修改代理、区域、语言或指纹种子后，需要重启蓝豆浏览器。网站登录数据会保留。'),editing?btn('查看当前指纹信息',()=>viewFingerprintFromEditor(form)):h('p',{className:'lm-muted'},'保存环境后，可在环境详情中查看完整指纹信息。')),
         editorSection==='accounts'&&h('section',{className:'lm-section'},h('h3',null,'平台账号'),h('p',{className:'lm-muted'},editing?'已保存账号可在环境详情的账号管理中维护。本页可随环境设置一起添加新账号。':'账号可以稍后添加，也可以连续录入多条后随环境一起保存。'),accountEditor),
         h('footer',{className:'lm-savebar lm-footer'},h('small',null,'草稿自动加密保存在本机'),h('div',{className:'lm-actions'},btn('稍后继续',()=>goto('envs')),h('button',{type:'submit',className:'lm-primary',disabled:!!busy||!!conflict||editing&&same(configOf(form),configOf(initial))&&!drafts.length},'保存环境'),btn('保存并打开',()=>run('save',()=>save(true)),false,!!conflict))));
@@ -456,13 +563,13 @@ window.__ModuleLoader__.load({
       const closeAccountEditor=()=>run('account-draft',async()=>{await flushDraft();setAccountEditing(false);setSavedDraft(draftValue());});
       const accountPage=()=>h('section',{className:'lm-enter'},envPicker,h('div',{className:'lm-head'},h('p',{className:'lm-muted'},'账号独立保存，同平台账号使用独立网站会话。'),btn('＋ 添加账号',()=>beginAccount(),true)),
         !accountEditing&&drafts.length>0&&h('div',{className:'lm-notice'},'有 '+drafts.length+' 条账号尚未保存',btn('继续编辑账号',()=>setAccountEditing(true))),
-        ...accounts.map(a=>h('article',{key:a.account_id,className:'lm-account-card','data-account':a.account_id},h('div',{className:'lm-head'},h('div',null,h('strong',{className:'lm-icon-title'},platformIcon(a,20),a.platform+' · '+(a.username||a.login)),h('small',null,a.login+(a.site?' · '+a.site:''))),h('span',{className:'lm-badge'},accountStatus[a.status]||'登录状态待检查')),h('p',{className:'lm-muted'},a.label||a.url||'旧版账号：请补充网站地址'),h('div',{className:'lm-actions'},btn('打开账号网站',()=>accountAction(a,'open'),true),btn('账号详情',()=>{setAccountDetail(a.account_id);setSecret(null);})))),
+        ...accounts.map(a=>h('article',{key:a.account_id,className:'lm-account-card','data-account':a.account_id},h('div',{className:'lm-head'},h('div',null,h('strong',{className:'lm-icon-title'},platformIcon(a,20),a.platform+' · '+(a.username||a.login)),h('small',{className:'lm-account-login-row'},h('span',{className:'lm-account-login-value'},a.login+(a.site?' · '+a.site:'')),h('button',{type:'button',className:'lm-copy-login','aria-label':'复制 '+a.platform+' 登录账号',onClick:()=>run('copy-login',async()=>{await copyLocalCredential(a.login);setNotice('登录账号已复制');})},'复制'))),h('span',{className:'lm-badge'},accountStatus[a.status]||'登录状态待检查')),h('p',{className:'lm-muted'},a.label||a.url||'旧版账号：请补充网站地址'),h('div',{className:'lm-actions'},btn('打开账号网站',()=>accountAction(a,'open'),true),btn('账号详情',()=>{setAccountDetail(a.account_id);})))),
         !accounts.length&&!drafts.length&&h('p',{className:'lm-empty'},'此环境还没有账号。选择平台后可以连续添加。'));
       const activeAccount=accounts.find(a=>a.account_id===accountDetail);
-      const accountDetails=()=>activeAccount&&h(WorkspaceDialog,{title:'账号详情',context:'所属环境：'+(current?.display_name||focusEnv)+' · '+focusEnv,onClose:()=>{setAccountDetail('');setSecret(null);},locked:!!busy,footer:h('div',{className:'lm-actions'},btn('编辑账号资料',()=>beginAccount(activeAccount),true))},
-        h('h3',{className:'lm-icon-title'},platformIcon(activeAccount,20),activeAccount.platform+' · '+(activeAccount.username||activeAccount.login)),h('dl',null,h('dt',null,'登录账号'),h('dd',null,activeAccount.login),h('dt',null,'网站'),h('dd',null,activeAccount.url||'尚未设置'),h('dt',null,'备注'),h('dd',null,activeAccount.label||'—'),h('dt',null,'登录状态'),h('dd',null,accountStatus[activeAccount.status]||'待检查')),
+      const accountDetails=()=>activeAccount&&h(WorkspaceDialog,{title:'账号详情',context:'所属环境：'+(current?.display_name||focusEnv)+' · '+focusEnv,onClose:()=>{setAccountDetail('');},locked:!!busy,footer:h('div',{className:'lm-actions'},btn('编辑账号资料',()=>beginAccount(activeAccount),true))},
+        h('h3',{className:'lm-icon-title'},platformIcon(activeAccount,20),activeAccount.platform+' · '+(activeAccount.username||activeAccount.login)),h('dl',null,h('dt',null,'登录账号'),h('dd',{className:'lm-login-detail'},h('span',{className:'lm-login-value'},activeAccount.login),h('button',{type:'button',className:'lm-copy-login',onClick:()=>run('copy-login',async()=>{await copyLocalCredential(activeAccount.login);setNotice('登录账号已复制');})},'复制')),h('dt',null,'网站'),h('dd',null,activeAccount.url||'尚未设置'),h('dt',null,'备注'),h('dd',null,activeAccount.label||'—'),h('dt',null,'登录状态'),h('dd',null,accountStatus[activeAccount.status]||'待检查')),
         notice&&h('p',{role:'status',className:'lm-notice'},notice),h('section',{className:'lm-section'},h('h3',null,'登录操作'),h('label',{className:'lm-field'},h('span',null,'本次验证码'),h('input',{type:'text',inputMode:'numeric',autoComplete:'one-time-code',value:manualCodes[activeAccount.account_id]||'',placeholder:'需要时填写，不长期保存',onChange:e=>setManualCodes({...manualCodes,[activeAccount.account_id]:e.target.value})})),h('div',{className:'lm-actions'},btn('填入登录资料',()=>accountAction(activeAccount,'fill')),btn('检查登录状态',()=>accountAction(activeAccount,'check')),btn('我已确认登录',()=>run('confirm-login',async()=>{if(!confirm('请在网站确认显示的账号正确且已登录，再记录此状态。'))return;const r=await request('accounts',{env_id:focusEnv,account_id:activeAccount.account_id,action:'confirm'});setNotice(r.message);await loadAccounts(focusEnv);}),false,activeAccount.status==='user_confirmed'))),
-        h('section',{className:'lm-section'},h('h3',null,'本机凭据'),h('div',{className:'lm-actions'},activeAccount.has_password&&btn('查看密码',()=>run('credential',async()=>{const r=await request('accounts',{env_id:focusEnv,account_id:activeAccount.account_id,action:'credential',field:'password'});setSecret({value:r.value,expires_at:Date.now()/1000+20});})),activeAccount.has_otp&&btn('获取 2FA 验证码',()=>run('totp',async()=>{const r=await request('accounts',{env_id:focusEnv,account_id:activeAccount.account_id,action:'totp'});setSecret({value:r.code,expires_at:r.expires_at});}))),secret&&h('div',{className:'lm-notice'},h('p',{className:'lm-secret'},secret.value),h('small',null,'到期自动隐藏，请勿分享'),btn('隐藏凭据',()=>setSecret(null)))),
+        h(AccountCredentials,{key:focusEnv+':'+activeAccount.account_id+':'+activeAccount.revision,account:activeAccount,envId:focusEnv}),
         h('details',{className:'lm-section'},h('summary',null,'移除账号'),h('p',{className:'lm-muted'},'只移除账号资料，保留网站登录数据。'),btn('移除账号资料',()=>run('account-delete',async()=>{if(!confirm('仅移除这条账号资料，网站登录数据仍保留，继续？'))return;await request('accounts',{action:'delete',env_id:focusEnv,account_id:activeAccount.account_id,revision:activeAccount.revision});setAccountDetail('');await loadAccounts(focusEnv);await refresh();}))));
       const jobTitle=job?({running:'检测中',cancelling:'取消中',complete:'检测完成',cancelled:'已取消',interrupted:'检测中断'}[job.status]||job.status)+' · '+job.done+'/'+job.total:'';
       const proxyPage=()=>h('section',{className:'lm-enter'},
@@ -558,14 +665,14 @@ window.__ModuleLoader__.load({
       .lm-workspace .lm-head{margin-bottom:8px}
       .lm-detail{grid-column:2/-1;background:rgba(100,120,150,.04);padding:14px;border-radius:7px}.lm-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}.lm-inline input{flex:1;min-width:120px}.lm-inline select{width:auto}
       .lm-account-card,.lm-account-edit{border:1px solid var(--lm-border);border-radius:6px;padding:12px;margin:8px 0}
-      .lm-account-card small{display:block;margin-top:4px}.lm-account-edit{border-left:3px solid var(--lm-blue)}
+      .lm-account-card small{display:block;margin-top:4px;overflow-wrap:anywhere;word-break:break-word}.lm-account-login-row{display:flex!important;align-items:flex-start;gap:8px}.lm-account-login-value{min-width:0;flex:1;overflow-wrap:anywhere;word-break:break-word}.lm-account-edit{border-left:3px solid var(--lm-blue)}
       .lm-empty{padding:40px 12px;text-align:center}.lm-file{display:inline-flex;gap:10px;align-items:center;margin:10px 0}.lm-workspace .lm-file input{width:auto;max-width:280px}
       .lm-modal{width:min(760px,calc(100% - 40px));max-width:none;max-height:calc(100dvh - 40px);margin:auto;padding:0;overflow:hidden;color:inherit;background:var(--lm-bg);border:1px solid var(--lm-border);box-shadow:0 12px 55px #0003;border-radius:12px}
       .lm-modal[open]{display:flex;flex-direction:column;animation:lm-enter var(--lm-duration) var(--lm-motion)}.lm-modal::backdrop{background:rgba(15,23,42,.28);animation:lm-backdrop var(--lm-duration) var(--lm-motion)}
       .lm-modal-head,.lm-modal-foot{flex:none;padding:10px 16px;background:var(--lm-bg)}.lm-modal-head{display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid var(--lm-border)}.lm-modal-head h3{margin:0}.lm-modal-head small{display:block;margin-top:4px;overflow-wrap:anywhere}.lm-modal-foot{border-top:1px solid var(--lm-border)}.lm-modal-foot .lm-actions{justify-content:flex-end}
-      .lm-modal-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable;padding:12px 16px;scroll-padding-block:12px}.lm-modal-body .lm-account-edit:first-child{margin-top:0}
+      .lm-modal-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable;padding:12px 16px;scroll-padding-block:12px}.lm-modal-body .lm-account-edit:first-child{margin-top:0}.lm-login-detail{display:flex;align-items:flex-start;gap:10px}.lm-login-value{min-width:0;overflow-wrap:anywhere;word-break:break-word}.lm-copy-login{flex:none;border:0;background:none;color:var(--lm-blue);padding:0;cursor:pointer;font:inherit}.lm-copy-login:focus-visible{outline:3px solid #8bb9ff;outline-offset:2px}
       @keyframes lm-backdrop{from{opacity:0}to{opacity:1}}
-      .lm-secret{font-size:24px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.lm-busy{position:sticky;top:0;background:var(--lm-bg);padding:8px;border-left:3px solid var(--lm-blue);z-index:5}
+      .lm-credential-row{display:flex;align-items:center;flex-wrap:wrap;gap:10px;min-height:38px}.lm-password{flex:1;min-width:70px;overflow-wrap:anywhere;user-select:text}.lan-manager .lm-otp-code{font:600 24px/1.3 Consolas,monospace;letter-spacing:3px;color:var(--lm-blue);border:0;background:transparent;font-variant-numeric:tabular-nums}.lm-secret{font-size:24px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.lm-busy{position:sticky;top:0;background:var(--lm-bg);padding:8px;border-left:3px solid var(--lm-blue);z-index:5}
       .lm-proxy-facts{display:block;margin:3px 0;color:var(--lm-muted)}
       .lm-toast-layer[hidden]{display:none}
       .lm-toast-layer{position:absolute;z-index:20;top:auto;bottom:12px;left:20px;right:20px;max-height:35%;overflow-y:auto;display:grid;align-content:end;gap:6px;pointer-events:none}.lm-toast{pointer-events:auto;justify-self:end;max-width:min(620px,100%);padding:7px 10px!important;margin:0!important;background:var(--lm-bg);box-shadow:0 3px 12px #0002}.lm-toast-layer .lm-busy{position:static;justify-self:end;padding:6px 10px}
@@ -628,16 +735,25 @@ window.__ModuleLoader__.load({
         const place = () => {
           const rect = anchor.current?.getBoundingClientRect();
           if (!rect || !popup) return;
-          const width = Math.min(320, innerWidth - 24);
-          const below = innerHeight - rect.bottom - 12;
-          const height = Math.min(420, Math.max(below, rect.top - 12));
-          Object.assign(popup.style, { width: `${width}px`, maxHeight: `${height}px`,
-            left: `${Math.max(12, Math.min(rect.left, innerWidth - width - 12))}px`,
-            top: `${below >= Math.min(320, height) ? rect.bottom + 6 : Math.max(12, rect.top - height - 6)}px` });
+          const width = Math.min(320, Math.max(0, innerWidth - 24));
+          const below = Math.max(0, innerHeight - rect.bottom - 18);
+          const above = Math.max(0, rect.top - 18);
+          Object.assign(popup.style, { width: `${width}px`,
+            maxHeight: `${Math.min(420, Math.max(below, above))}px`,
+            left: `${Math.max(12, Math.min(rect.left, innerWidth - width - 12))}px` });
+          // Measure the shown popover, not its maximum height: filtered/short
+          // lists should stay beside the trigger and long lists must fit.
+          const height = popup.getBoundingClientRect().height;
+          const top = below >= height || below >= above ? rect.bottom + 6 : rect.top - height - 6;
+          popup.style.top = `${Math.max(12, Math.min(top, innerHeight - height - 12))}px`;
         };
-        place();
         popup?.showPopover();
-        popup?.querySelector('input[type="search"]')?.focus();
+        place();
+        popup?.querySelector('input[type="search"]')?.focus({ preventScroll: true });
+        const resize = new ResizeObserver(place);
+        if (popup) resize.observe(popup);
+        if (anchor.current) resize.observe(anchor.current);
+        const scroll = event => { if (!popup?.contains(event.target)) place(); };
         const outside = (event) => {
           if (!popup?.contains(event.target) && !anchor.current?.contains(event.target)) setOpen(false);
         };
@@ -646,11 +762,14 @@ window.__ModuleLoader__.load({
         };
         document.addEventListener('pointerdown', outside, true);
         document.addEventListener('keydown', escape, true);
+        document.addEventListener('scroll', scroll, true);
         addEventListener('resize', place);
         return () => {
+          resize.disconnect();
           popup?.hidePopover();
           document.removeEventListener('pointerdown', outside, true);
           document.removeEventListener('keydown', escape, true);
+          document.removeEventListener('scroll', scroll, true);
           removeEventListener('resize', place);
         };
       }, [open, refresh]);
@@ -686,7 +805,9 @@ window.__ModuleLoader__.load({
           'data-lan-env-menu': sessionId,
           style: { position: 'fixed', inset: 'auto', margin: 0, boxSizing: 'border-box',
             padding: 12, border: '1px solid var(--dsw-alias-border-l2, #ddd)', borderRadius: 10,
-            background: 'var(--dsw-specific-menu, white)', color: 'var(--dsw-alias-label-primary, #333)',
+            // DSH's menu token is translucent (#f8f9fa94 in light mode).
+            // This picker has no frosted backdrop: use an opaque theme surface.
+            background: 'var(--dsw-alias-bg-base, white)', color: 'var(--dsw-alias-label-primary, #333)',
             boxShadow: '0 8px 30px #0002', fontSize: 13, overflow: 'auto' } },
           h('div', { style: { fontWeight: 600, marginBottom: 6 } }, '浏览器环境（可多选）'),
           h('div', { style: { fontSize: 12, opacity: .65, lineHeight: 1.6, marginBottom: 10 } },
@@ -786,7 +907,7 @@ window.__ModuleLoader__.load({
         let mode = false, rows = [], active = '', confirmedActive = '', pendingAccount = '', observerQueued = 0, busy = false, queuedAction = null;
         let disposed=false, refreshing=null, refreshVersion=0, listSignature='', inFlightKey='', notice='';
         let runtime={states:{}},unsubscribeStatus=null,confirmedSession='';
-        const syncStatus=()=>{if(mode&&!document.hidden&&!unsubscribeStatus)unsubscribeStatus=runtimeStatus.subscribe(data=>{runtime=data;if(!busy&&data.live_status==='ready'){active=confirmedActive=data.active||'';confirmedSession=data.active_session||'';}paintState();});else if((!mode||document.hidden)&&unsubscribeStatus){unsubscribeStatus();unsubscribeStatus=null;}};
+        const syncStatus=()=>{if(mode&&!document.hidden&&!unsubscribeStatus)unsubscribeStatus=runtimeStatus.subscribe(data=>{runtime=data;if(!busy&&data.live_status==='ready'){active=confirmedActive=data.active||'';confirmedSession=data.active_session||'';if(active&&!rows.some(env=>env.env_id===active))refresh();}paintState();});else if((!mode||document.hidden)&&unsubscribeStatus){unsubscribeStatus();unsubscribeStatus=null;}};
         const controllers=new Set();
         let boundHeader = null, boundList = null, custom = null;
         const request = async (path, body={}, timeout=12000) => {
@@ -799,6 +920,12 @@ window.__ModuleLoader__.load({
             return data;
           } finally { clearTimeout(timer);controllers.delete(controller); }
         };
+        const applyCatalog = data => {
+          const nextRows=(data.envs||[]).map(env=>({env_id:env.env_id,display_name:env.display_name,account_count:env.account_count,selected_account_session:env.selected_account_session,
+            accounts:(env.accounts||[]).map(a=>({account_id:a.account_id,session_env_id:a.session_env_id,platform_id:a.platform_id,platform:a.platform,url:a.url,username:a.username,login:a.login}))}));
+          const signature=JSON.stringify(nextRows);
+          if(signature!==listSignature){rows=nextRows;listSignature=signature;render();}else paintState();
+        };
         const refresh = () => {
           if(disposed||busy)return;
           if(refreshing)return refreshing;
@@ -807,11 +934,8 @@ window.__ModuleLoader__.load({
             try {
               const data=await request('/v1/lan/manage/list');
               if(disposed||version!==refreshVersion)return;
-              const nextRows=(data.envs||[]).map(env=>({env_id:env.env_id,display_name:env.display_name,account_count:env.account_count,selected_account_session:env.selected_account_session,
-                accounts:(env.accounts||[]).map(a=>({account_id:a.account_id,session_env_id:a.session_env_id,platform_id:a.platform_id,platform:a.platform,url:a.url,username:a.username,login:a.login}))}));
-              const signature=JSON.stringify(nextRows);
               active=confirmedActive=data.active||'';notice='';
-              if(signature!==listSignature){rows=nextRows;listSignature=signature;render();}else paintState();
+              applyCatalog(data);
             } catch { if(!disposed&&version===refreshVersion){notice='环境列表暂不可用，请切回后重试';paintState();} }
             finally {refreshing=null;}
           })();
@@ -910,8 +1034,10 @@ window.__ModuleLoader__.load({
         const onVisibility=()=>{syncStatus();if(document.visibilityState==='visible'&&mode&&!busy)refresh();};
         document.addEventListener('visibilitychange',onVisibility);
         const onImported=()=>{if(mode)refresh();};window.addEventListener('lan-env-imported',onImported);
+        const onCatalogUpdated=event=>{if(disposed)return;refreshVersion++;notice='';applyCatalog(event.detail);};
+        environmentCatalogEvents.addEventListener('updated',onCatalogUpdated);
         bind();
-        return()=>{disposed=true;unsubscribeStatus?.();queuedAction=null;controllers.forEach(controller=>controller.abort());observer.disconnect();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('lan-env-imported',onImported);boundHeader?.querySelector('.lan-env-sidebar-create')?.remove();if(observerQueued)cancelAnimationFrame(observerQueued);style.remove();custom?.remove();boundHeader?.querySelector('.lan-env-sidebar-toggle')?.remove();const label=boundHeader?.querySelector('.GAkraW_sectionLabel');if(label&&label.textContent==='我的环境')label.textContent='工作区';boundHeader?.closest('.GAkraW_root')?.removeAttribute('data-lan-env-mode');if(boundList)boundList.style.display='';};
+        return()=>{disposed=true;unsubscribeStatus?.();queuedAction=null;controllers.forEach(controller=>controller.abort());observer.disconnect();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('lan-env-imported',onImported);environmentCatalogEvents.removeEventListener('updated',onCatalogUpdated);boundHeader?.querySelector('.lan-env-sidebar-create')?.remove();if(observerQueued)cancelAnimationFrame(observerQueued);style.remove();custom?.remove();boundHeader?.querySelector('.lan-env-sidebar-toggle')?.remove();const label=boundHeader?.querySelector('.GAkraW_sectionLabel');if(label&&label.textContent==='我的环境')label.textContent='工作区';boundHeader?.closest('.GAkraW_root')?.removeAttribute('data-lan-env-mode');if(boundList)boundList.style.display='';};
       }, 'lan-seats: environment and account sidebar switcher');
     }
 
@@ -938,15 +1064,19 @@ window.__ModuleLoader__.load({
         `;
         (document.head || document.documentElement).append(shadowStyle);
 
-        let lastWidth = 0;
+        let lastState = '';
         let observed = null;
         let queued = 0;
         const sidebar = () => document.querySelector('.mP3x-q_sidebarCol');
         const send = (action) => {
           const width = Math.round(sidebar()?.getBoundingClientRect().width || 280);
-          if (action === 'ready' && width === lastWidth) return;
-          lastWidth = width;
-          console.info('LAN_OVERLAY_UI:' + JSON.stringify({action, sidebar_width: width}));
+          const visible = element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden';
+          const modal = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]')].some(visible);
+          const shell = !!(sidebar() && document.querySelector('.GAkraW_root'));
+          const state = JSON.stringify({action, sidebar_width: width, shell_ready: shell, modal_visible: modal});
+          if (action === 'ready' && state === lastState) return;
+          lastState = state;
+          console.info('LAN_OVERLAY_UI:' + state);
         };
         const resize = new ResizeObserver(() => send('ready'));
         const bind = () => {
@@ -959,12 +1089,21 @@ window.__ModuleLoader__.load({
           }
         };
         const mountObserver = new MutationObserver(() => {
-          if (!queued) queued = requestAnimationFrame(() => { queued = 0; bind(); });
+          if (!queued) queued = requestAnimationFrame(() => { queued = 0; bind(); send('ready'); });
         });
-        mountObserver.observe(document.body, {childList: true, subtree: true});
+        mountObserver.observe(document.body, {childList: true, subtree: true, attributes: true,
+          attributeFilter: ['class', 'style', 'open', 'aria-modal', 'role', 'hidden']});
         const onClick = (event) => {
           const target = event.target instanceof Element ? event.target : event.target?.parentElement;
           if (!target) return;
+          // Selecting this main-slot panel changes DSH's route, but does not
+          // reveal our native clip. Send intent on every click, including an
+          // already-selected panel after click-away and the compact icon rail.
+          // This expands the host only; DSH's conversation rightbar stays closed.
+          if (target.closest('nav button[aria-label="我的环境"]')) {
+            send('expand');
+            return;
+          }
           // Ignore the first click while the DSH shell is mounting.  Without a
           // rightbar opened yet, the shell's transient conversation controls can
           // otherwise emit an expand event before the environment panel mounts.
@@ -975,10 +1114,8 @@ window.__ModuleLoader__.load({
             // Sidebar width and conversation visibility are independent.
             if (target.closest('button[aria-keyshortcuts="Control+Alt+B"]')) return;
             // Environment shortcuts switch browser sessions without opening the DSH conversation pane.
-            // Selecting the environment main panel must never open the Agent
-            // conversation rightbar.  The create shortcut programmatically
-            // clicks this same native navigation row, so exclude both paths.
-            if (target.closest('.lan-env-sidebar-toggle, .lan-env-sidebar-env, .lan-env-sidebar-account, .lan-env-sidebar-create, nav button[aria-label="我的环境"]')) return;
+            // Switching environment/account is not opening the management panel.
+            if (target.closest('.lan-env-sidebar-toggle, .lan-env-sidebar-env, .lan-env-sidebar-account, .lan-env-sidebar-create')) return;
             if (target.closest('[class*="sessionRow"], [class*="projectRow"], nav, button')) {
               send('expand');
             }
@@ -986,6 +1123,7 @@ window.__ModuleLoader__.load({
         };
         document.addEventListener('click', onClick, true);
         bind();
+        send('ready');
         return () => {
           document.removeEventListener('click', onClick, true);
           mountObserver.disconnect();
@@ -997,6 +1135,7 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
+      installProductInfo(ctx);
       installOverlayHost(ctx);
       installEnvScopePicker(ctx);
       installSidebarEnvSwitcher(ctx);

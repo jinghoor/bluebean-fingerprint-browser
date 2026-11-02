@@ -155,6 +155,14 @@
           "type": "string",
           "description": "新标签页完整http(s)网址"
         },
+        "ip_mode": {
+          "type": "string",
+          "enum": [
+            "static",
+            "dynamic"
+          ],
+          "description": "静态 IP 在首次启动时核对已保存出口；动态 IP 不因出口变化提示风险"
+        },
         "create_only": {
           "type": "boolean"
         },
@@ -393,6 +401,14 @@
         "expected_exit_ip": {
           "type": "string",
           "description": ""
+        },
+        "ip_mode": {
+          "type": "string",
+          "enum": [
+            "static",
+            "dynamic"
+          ],
+          "description": "静态 IP 在首次启动时核对已保存出口；动态 IP 不因出口变化提示风险"
         }
       },
       "required": [],

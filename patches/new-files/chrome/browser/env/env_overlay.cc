@@ -21,9 +21,11 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/no_destructor.h"
+#include "base/supports_user_data.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
@@ -71,6 +73,62 @@ class EnvOverlayClickAway;
 
 namespace {
 
+const char kAssistantContentsKey = 0;
+const char kAssistantAuxiliaryContentsKey = 0;
+
+// WebView's default delegate drops window.open(). DSH preopens about:blank
+// synchronously, then navigates that SAME window after auth_init completes.
+// Retain the supplied contents, rather than reopening its initial blank URL.
+class AssistantWebView : public views::WebView {
+  METADATA_HEADER(AssistantWebView, views::WebView)
+
+ public:
+  AssistantWebView(content::BrowserContext* context,
+                   BrowserWindowInterface* browser,
+                   base::RepeatingClosure on_open)
+      : views::WebView(context), browser_(browser), on_open_(std::move(on_open)) {}
+
+  content::WebContents* AddNewContents(
+      content::WebContents* source,
+      std::unique_ptr<content::WebContents> new_contents,
+      const GURL& target_url,
+      WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& window_features,
+      bool user_gesture,
+      bool* was_blocked) override {
+    if (!browser_ || !new_contents ||
+        (!target_url.is_empty() && target_url != GURL("about:blank") &&
+         !target_url.SchemeIsHTTPOrHTTPS())) {
+      if (was_blocked) {
+        *was_blocked = true;
+      }
+      return nullptr;
+    }
+    new_contents->SetUserData(&kAssistantAuxiliaryContentsKey,
+                             std::make_unique<base::SupportsUserData::Data>());
+    // Keep account authorization separate from the selected fingerprint
+    // environment; its proxy, startup gate and tab adoption do not own login.
+    content::WebContents* opened = chrome::AddWebContents(
+        browser_, source, std::move(new_contents), target_url,
+        WindowOpenDisposition::kNewPopup, window_features,
+        NavigateParams::WindowAction::kShowWindow, user_gesture);
+    if (was_blocked) {
+      *was_blocked = !opened;
+    }
+    if (opened) {
+      on_open_.Run();
+    }
+    return opened;
+  }
+
+ private:
+  raw_ptr<BrowserWindowInterface> browser_;
+  base::RepeatingClosure on_open_;
+};
+
+BEGIN_METADATA(AssistantWebView)
+END_METADATA
+
 using HostMap = std::map<BrowserView*, EnvOverlayHost*>;
 
 HostMap& Hosts() {
@@ -79,6 +137,14 @@ HostMap& Hosts() {
 }
 
 }  // namespace
+
+bool IsAssistantWebContents(content::WebContents* contents) {
+  return contents && contents->GetUserData(&kAssistantContentsKey);
+}
+
+bool IsAssistantAuxiliaryWebContents(content::WebContents* contents) {
+  return contents && contents->GetUserData(&kAssistantAuxiliaryContentsKey);
+}
 
 // A layer above the page, parented to the BrowserView rather than to the contents container.
 //
@@ -110,6 +176,7 @@ class EnvOverlayHost : public views::View,
 
   // views::ViewObserver:
   void OnViewBoundsChanged(views::View* observed_view) override;
+  void OnViewHierarchyWillBeDeleted(views::View* observed_view) override;
 
   void InstallClickAway(aura::Window* event_window);
   void SetPageWindow(aura::Window* page_window) { page_window_ = page_window; }
@@ -136,6 +203,8 @@ class EnvOverlayHost : public views::View,
       return;
     }
     url_ = url;
+    bootstrap_visible_ = true;
+    LayoutContents();
     web_view_->GetWebContents()->GetController().LoadURL(
         url, content::Referrer(), ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
     LOG(ERROR) << "ENVOVERLAY: navigated to " << url.spec().substr(0, 70);
@@ -168,7 +237,11 @@ class EnvOverlayHost : public views::View,
   void LayoutContents();
   gfx::Rect ContentAreaInParent() const;
   gfx::Rect VisibleCardBounds() const;
-  void ApplyPageAction(std::string action, int sidebar_width);
+  void ApplyPageAction(std::string action, int sidebar_width,
+                       bool shell_ready, bool modal_visible);
+  bool FullViewportVisible() const {
+    return bootstrap_visible_ || modal_visible_ || !collapsed_;
+  }
 
   bool DoesIntersectRect(const views::View* target,
                          const gfx::Rect& rect) const override {
@@ -201,6 +274,9 @@ class EnvOverlayHost : public views::View,
   std::unique_ptr<EnvOverlayClickAway> click_away_;
   bool shrunk_ = false;
   bool collapsed_ = true;
+  // First-run login/setup must remain visible before the normal shell mounts.
+  bool bootstrap_visible_ = true;
+  bool modal_visible_ = false;
   int sidebar_width_ = 280;
   int reserved_width_ = 0;
   gfx::Rect full_content_bounds_;
@@ -253,9 +329,16 @@ EnvOverlayHost::EnvOverlayHost(content::BrowserContext* context,
 
   // No C++ title bar: it left an unpainted strip where the page showed through. The page draws its own collapse button
   // and asks the bridge to hide the layer; the layer itself is just the rounded card.
-  web_view_ = AddChildView(std::make_unique<views::WebView>(context));
+  web_view_ = AddChildView(std::make_unique<AssistantWebView>(
+      context, browser_view_->browser(),
+      base::BindRepeating(&EnvOverlayHost::SetOverlayVisible,
+                          weak_factory_.GetWeakPtr(), false)));
+  web_view_->SetAcceleratorHandling(
+      views::WebContentsAcceleratorHandling::kEnabled);
 
   auto contents = content::WebContents::Create(content::WebContents::CreateParams(context));
+  contents->SetUserData(&kAssistantContentsKey,
+                       std::make_unique<base::SupportsUserData::Data>());
   contents->GetController().LoadURL(url, content::Referrer(),
                                     ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
   // Opaque base: the workbench relies on it to paint the sidebar's surface. Making it transparent (tried for the freed
@@ -298,6 +381,24 @@ void EnvOverlayHost::OnViewBoundsChanged(views::View* observed_view) {
   LayoutContents();
 }
 
+void EnvOverlayHost::OnViewHierarchyWillBeDeleted(views::View* observed_view) {
+  // BrowserView destroys its content area before this later-added overlay.
+  // Clear the observation while the view is alive: removing it in our
+  // destructor otherwise dereferences an already deleted sibling.
+  if (observed_view == content_area_) {
+    content_area_->RemoveObserver(this);
+    content_area_ = nullptr;
+  }
+  if (observed_view == browser_view_) {
+    auto it = Hosts().find(browser_view_);
+    if (it != Hosts().end() && it->second == this) {
+      Hosts().erase(it);
+    }
+    browser_view_->RemoveObserver(this);
+    browser_view_ = nullptr;
+  }
+}
+
 gfx::Rect EnvOverlayHost::ContentAreaInParent() const {
   if (!browser_view_ || !content_area_) {
     return gfx::Rect();
@@ -334,7 +435,7 @@ gfx::Rect EnvOverlayHost::VisibleCardBounds() const {
     return gfx::Rect();
   }
   gfx::Rect card = web_view_->bounds();
-  if (collapsed_) {
+  if (!FullViewportVisible()) {
     card.set_width(std::min(sidebar_width_, card.width()));
   }
   return card;
@@ -353,8 +454,8 @@ void EnvOverlayHost::LayoutContents() {
       available, std::max(kMinLayerWidth, width_override_ > 0
           ? width_override_ : content.width() * 2 / 3 - kMargin * 2 - kColumnGap));
   const int height = std::max(1, content.height() - kMargin * 2);
-  const int visible_width = collapsed_ ? std::min(sidebar_width_, viewport_width)
-                                     : viewport_width;
+  const int visible_width = FullViewportVisible() ? viewport_width
+                                                : std::min(sidebar_width_, viewport_width);
   // The viewport stays wide so DSH retains its own full sidebar. Only the
   // containing View and native surface clip shrink; no page scaling or CSS hide.
   SetBoundsRect(gfx::Rect(content.x(), content.y(),
@@ -365,7 +466,7 @@ void EnvOverlayHost::LayoutContents() {
   web_view_->holder()->SetNativeViewClipRect(
       gfx::Rect(0, 0, shrunk_ ? 2 : visible_width, shrunk_ ? 2 : height));
   web_view_->holder()->SetNativeViewCornerRadii(
-      collapsed_ ? gfx::RoundedCornersF()
+      !FullViewportVisible() ? gfx::RoundedCornersF()
                  : gfx::RoundedCornersF(0, kCornerRadius, kCornerRadius, 0));
   web_view_->holder()->InvalidateLayout();
 }
@@ -379,7 +480,7 @@ void EnvOverlayHost::OnPaint(gfx::Canvas* canvas) {
   SkPathBuilder builder;
   builder.addRRect(gfx::RoundedRectToSkRRect(
       VisibleCardBounds(),
-      collapsed_ ? gfx::RoundedCornersF()
+      !FullViewportVisible() ? gfx::RoundedCornersF()
                  : gfx::RoundedCornersF(0, kCornerRadius, kCornerRadius, 0)));
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
@@ -433,10 +534,17 @@ void EnvOverlayHost::OnDidAddMessageToConsole(
   const int sidebar_width = value.FindInt("sidebar_width").value_or(0);
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&EnvOverlayHost::ApplyPageAction,
-                               weak_factory_.GetWeakPtr(), *action, sidebar_width));
+                               weak_factory_.GetWeakPtr(), *action, sidebar_width,
+                               value.FindBool("shell_ready").value_or(false),
+                               value.FindBool("modal_visible").value_or(false)));
 }
 
-void EnvOverlayHost::ApplyPageAction(std::string action, int sidebar_width) {
+void EnvOverlayHost::ApplyPageAction(std::string action, int sidebar_width,
+                                     bool shell_ready, bool modal_visible) {
+  if (shell_ready) {
+    bootstrap_visible_ = false;
+  }
+  modal_visible_ = modal_visible;
   // DSH's own collapsed sidebar is 56 DIP; both sidebar states reserve space.
   if (sidebar_width >= 32 && sidebar_width <= 480 &&
       sidebar_width_ != sidebar_width) {
@@ -493,6 +601,12 @@ void EnvOverlayHost::WriteLayerStateFile() {
 }
 
 void EnvOverlayHost::CollapseToRail() {
+  if (bootstrap_visible_ || modal_visible_) {
+    // A modal must remain fully visible when shown, but may not trap the
+    // browser. Hide the whole host without cancelling/reloading its dialog.
+    SetOverlayVisible(false);
+    return;
+  }
   collapsed_ = true;
   WriteLayerStateFile();
   LayoutContents();               // the clip changes here, in the same frame as the click
@@ -536,7 +650,9 @@ std::string EnvOverlayHost::Describe() const {
   std::string text = "host=" + bounds().ToString() +
                      " visible=" + base::NumberToString(GetVisible() ? 1 : 0) +
                      " layer=" + base::NumberToString(IsLayerShown() ? 1 : 0) +
-                     " collapsed=" + base::NumberToString(collapsed_ ? 1 : 0);
+                     " collapsed=" + base::NumberToString(collapsed_ ? 1 : 0) +
+                     " bootstrap=" + base::NumberToString(bootstrap_visible_ ? 1 : 0) +
+                     " modal=" + base::NumberToString(modal_visible_ ? 1 : 0);
   if (web_view_) {
     text += " webview=" + web_view_->bounds().ToString();
     text += " card=" + VisibleCardBounds().ToString();
@@ -708,6 +824,14 @@ bool RestoreOverlay(BrowserWindowInterface* window) {
   return false;
 }
 
+bool RefreshOverlay(BrowserWindowInterface* window, const GURL& url) {
+  if (EnvOverlayHost* host = Find(window)) {
+    host->NavigateTo(url);
+    return true;
+  }
+  return false;
+}
+
 bool OverlayVisible(BrowserWindowInterface* window) {
   EnvOverlayHost* host = Find(window);
   return host && host->IsLayerShown();
@@ -733,6 +857,12 @@ void ToggleAssistantLayer(BrowserWindowInterface* window) {
              << " visible=" << OverlayVisible(window);
   if (OverlayVisible(window)) {
     HideOverlay(window);
+    return;
+  }
+  // The live host already owns its URL and native clip. Restoring it must not
+  // depend on a service state file, which may be changing during recovery.
+  if (Find(window)) {
+    RestoreOverlay(window);
     return;
   }
   if (const GURL url = WorkbenchUrlFromStateFile(); url.is_valid()) {

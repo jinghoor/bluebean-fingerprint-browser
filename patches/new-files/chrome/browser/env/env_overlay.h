@@ -14,11 +14,21 @@
 
 class BrowserWindowInterface;
 class BrowserView;
+namespace content {
+class WebContents;
+}
 namespace views {
 class View;
 }
 
 namespace env {
+
+// Identity of the embedded assistant, set before its first navigation. Ordinary
+// tabs visiting the same URL must still obey the environment startup gate.
+bool IsAssistantWebContents(content::WebContents* contents);
+// Native-owned assistant popups retain their original WebContents and default
+// partition (including the login WindowProxy and loopback callback).
+bool IsAssistantAuxiliaryWebContents(content::WebContents* contents);
 
 // The assistant's sidebar reserves real content width. Its conversation floats
 // above the page without changing that reservation. The same DSH WebContents
@@ -61,6 +71,8 @@ void ShowAssistantLayer(BrowserWindowInterface* window);
 // its sidebar, so both surfaces point at one backend.
 GURL WorkbenchUrlForProduct();
 bool RestoreOverlay(BrowserWindowInterface* window);
+// Reconnect an existing host without changing whether the user hid it.
+bool RefreshOverlay(BrowserWindowInterface* window, const GURL& url);
 
 // Rectangle the overlay host currently occupies, in the same coordinates as the command reports.
 std::string OverlayGeometry(BrowserWindowInterface* window);

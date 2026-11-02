@@ -58,15 +58,20 @@ class WorkspaceServices:
         if action=='credential':
             field=payload.get('field')
             if field not in ('password','otp_secret'): raise ValueError('凭据字段无效')
-            return {'ok':True,'value':a.get(field,'')}
+            now=time.time()
+            return {'ok':True,'value':a.get(field,''),'server_time':now,'expires_at':now+15}
         if action=='totp':
             if not a.get('otp_secret'): raise ValueError('此账号未保存验证器密钥')
-            return {'ok':True,**totp(a['otp_secret'])}
+            now=time.time()
+            return {'ok':True,**totp(a['otp_secret'],now=now),'server_time':now}
         if action=='confirm':
             store.set_status(env,aid,'user_confirmed')
             meta=self._meta();meta['envs'].setdefault(env,{})['account_status_at']=time.time();self._write_meta(meta)
             return {'ok':True,'status':'user_confirmed','message':'已记录你确认的网站登录状态'}
         if action not in ('open','fill','check'): raise ValueError('账号操作无效')
+        if not a.get('url'):
+            platform=next((p for p in catalog() if p['name'].lower()==str(a.get('platform','')).lower()),{})
+            if platform.get('url'): a={**a,'url':platform['url']}
         if not a.get('url'): raise ValueError('请先为此账号补充网站地址')
         if payload.get('code') and not __import__('re').fullmatch(r'\d{6,8}',payload['code']): raise ValueError('本次验证码请输入 6–8 位数字')
         lock=getattr(self.bridge,'execution_lock',None) or nullcontext()

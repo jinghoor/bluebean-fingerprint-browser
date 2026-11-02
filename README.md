@@ -12,13 +12,15 @@
 
 ## 安装
 
-1. 从 Releases 下载 `BlueBean-Setup-Windows-x64.exe`。
+1. 从 Releases 下载 `BlueBean-Setup-1.0.4-Windows-x64.exe`。
 2. 运行安装程序并按向导完成安装。
 3. 从桌面快捷方式、开始菜单或安装目录中的 `BlueBean.exe` 启动。
 
 安装包为 Windows 10 2004（19041）及以上的 x64 版本。浏览器、DSH、Python 和 Node 运行时均随安装包附带。模型服务、代理和网站账号仍需使用者自行配置。
 
-安装、沙箱渲染、运行时、DSH 初始化、插件和卸载检查结果见 [1.0.1 发布测试说明](docs/RELEASE-1.0.1-TESTS.md)。卸载会保留用户数据。
+当前版本为 **1.0.4**。安装、沙箱渲染、运行时、DSH 初始化、插件和视频回归的检查结果见 [1.0.4 发布测试说明](docs/RELEASE-1.0.4-TESTS.md)。卸载会保留用户数据。
+
+商业授权与作者联系邮箱：**277030704@qq.com**。
 
 ## 从源码构建
 
@@ -29,6 +31,8 @@
 ```powershell
 python build-installer.py
 ```
+
+产品版本以 `bluebean_version.py` 为准，打包时写入安装器和原生启动器；DSH 菜单显示的版本也会在插件同步时更新。内核编译须保留 `proprietary_codecs=true` 和 `ffmpeg_branding="Chrome"`，构建示例见 `dev-args.gn` 与 `setup-chromium-build.ps1`；组件自己的许可和声明仍须保留。
 
 构建结果写入 `build/installers`。独立安装验证脚本见 `installer/verify_install.py`。自动验收需要使用一次性测试目录和独立数据目录。
 

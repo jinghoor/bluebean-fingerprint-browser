@@ -7,11 +7,14 @@
 #ifndef PermissionHelper
   #error PermissionHelper must point to the native sandbox ACL helper.
 #endif
+#ifndef ProductVersion
+  #define ProductVersion "1.0.4"
+#endif
 
 [Setup]
 AppId={{4F271ABA-D768-42B2-9A96-CE947AD56CBB}
 AppName=蓝豆指纹浏览器
-AppVersion=1.0.1
+AppVersion={#ProductVersion}
 AppPublisher=蓝豆助手
 AppCopyright=Copyright (c) 2026 何阳鸿
 LicenseFile={#PayloadRoot}\licenses\BlueBean-LICENSE
@@ -30,7 +33,11 @@ UninstallDisplayIcon={app}\BlueBean.exe
 Compression=lzma2/fast
 SolidCompression=no
 WizardStyle=modern
-CloseApplications=no
+; Detect locks from our private runtimes before replacing any package files.
+; Python services have no windows, so Restart Manager must also be allowed to
+; stop unresponsive/background holders after the installer's close-app prompt.
+CloseApplications=force
+CloseApplicationsFilter=*.exe,*.dll,*.pyd
 RestartApplications=no
 UsePreviousTasks=no
 ; The automated test mode keeps desktop and Windows app registration untouched.
@@ -39,6 +46,11 @@ CreateUninstallRegKey=not IsAcceptanceTest
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+chinesesimp.ApplicationsFound=蓝豆浏览器或后台组件仍在使用以下文件。请先保存正在进行的任务，再允许安装程序关闭这些程序。关闭后会继续升级，环境、账号和网站数据将保留。
+chinesesimp.CloseApplications=保存任务后，自动关闭占用程序(&A)
+chinesesimp.ErrorCloseApplications=仍有程序占用安装文件，安装程序未能自动关闭。请先退出蓝豆浏览器及后台组件，再继续安装；不要跳过被占用的文件。
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："

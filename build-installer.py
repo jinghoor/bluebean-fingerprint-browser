@@ -14,6 +14,8 @@ import winreg
 from datetime import datetime
 from pathlib import Path
 from installer.windows_security import finalize_installer
+from installer.payload_policy import assert_clean_payload
+from bluebean_version import VERSION
 
 
 ROOT = Path(__file__).resolve().parent
@@ -26,6 +28,7 @@ if not DSH.exists():
 
 ENTRY_MODULES = {
     "launch_env_window.pyw", "open_env_window.py", "_env_driver.py", "_nowindow.py",
+    "_runtime_state.py", "_startup_services.py", "env_startup_check.py",
     "bluebean_paths.py", "bind_env_proxies.py", "fp_launcher.py", "fp_proxy.py",
     "env_seed.py", "env_cli.py", "_ensure_bridge.py", "_ensure_relays.py",
     "_dsh_web.py", "lan_bridge.py", "browser_backend.py", "dsh_sessions.py",
@@ -141,6 +144,8 @@ def copy_python_runtime(destination: Path) -> None:
 
 def build_windows_installer(release: Path) -> Path:
     release = release.resolve()
+    clean = assert_clean_payload(release / "App")
+    print(f"Clean-user payload check passed ({clean['files_checked']} files).", flush=True)
     tools = release / "App" / "tools"
     tools.mkdir(exist_ok=True)
     shutil.copy2(ROOT / "installer" / "pnpm.cmd", tools / "pnpm.cmd")
@@ -167,6 +172,7 @@ def build_windows_installer(release: Path) -> Path:
     ], cwd=ROOT, check=True)
     subprocess.run([
         str(sdk / "bin" / sdk_version / "x64" / "rc.exe"), "/nologo",
+        f'/dBlueBeanVersionText="{VERSION}"', f'/dBlueBeanVersionNumber={VERSION.replace(".", ",")},0',
         f"/fo{resource}", str(ROOT / "installer" / "launcher.rc"),
     ], cwd=ROOT, check=True)
     subprocess.run([
@@ -198,7 +204,7 @@ def build_windows_installer(release: Path) -> Path:
         raise FileNotFoundError("Install Inno Setup or set BLUEBEAN_ISCC to ISCC.exe")
     print("Building the standard Windows installation wizard...", flush=True)
     with (release / "inno-build.log").open("wb") as log:
-        subprocess.run([str(compiler), f"/DPayloadRoot={release / 'App'}",
+        subprocess.run([str(compiler), f"/DPayloadRoot={release / 'App'}", f"/DProductVersion={VERSION}",
                         f"/DPermissionHelper={permission_helper}",
                         f"/DInstallerOutput={inno_output}", str(ROOT / "installer" / "BlueBean.iss")],
                        cwd=ROOT, check=True, timeout=3600, stdout=log, stderr=subprocess.STDOUT)
@@ -215,6 +221,7 @@ def build_windows_installer(release: Path) -> Path:
         f"/Fo{bootstrap_obj}", str(ROOT / "installer" / "setup_bootstrap.cpp"),
     ], cwd=ROOT, check=True)
     subprocess.run([str(sdk / "bin" / sdk_version / "x64" / "rc.exe"), "/nologo",
+                    f'/dBlueBeanVersionText="{VERSION}"', f'/dBlueBeanVersionNumber={VERSION.replace(".", ",")},0',
                     f"/fo{bootstrap_res}", str(ROOT / "installer" / "setup_bootstrap.rc")],
                    cwd=ROOT, check=True)
     subprocess.run([
@@ -264,6 +271,8 @@ def build() -> Path:
 
     for name in local_python_modules():
         shutil.copy2(ROOT / name, app / name)
+    shutil.copy2(ROOT / "env_check.html", app / "env_check.html")
+    shutil.copy2(ROOT / "env_check.js", app / "env_check.js")
     shutil.copytree(ROOT / "lan_plugin", app / "lan_plugin")
     shutil.copytree(ROOT / "lan_seats", app / "lan_seats",
                      ignore=shutil.ignore_patterns("__pycache__", "node_modules"))

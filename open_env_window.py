@@ -1,14 +1,13 @@
 """Open the built browser with the environment panel on screen.
 
-One command for "show me the multi-environment window": start the built
-chrome.exe against a dedicated profile, make sure the environments exist, switch to
-one and bring the side panel up, then focus the window.
+Start the built chrome.exe with the user's profile and show the environment
+panel. New profiles remain empty until the user explicitly creates an environment.
 
 Idempotent: if a browser with this profile is already running it is reused, so a
 second invocation just re-opens the panel.
 
     python open_env_window.py
-    python open_env_window.py --profile E:\\chromium-envs\\env-ui --envs fb-008,fb-012
+    python open_env_window.py --profile E:\\chromium-envs\\env-ui
 """
 
 from __future__ import annotations
@@ -18,6 +17,8 @@ import json
 import subprocess
 
 from _nowindow import no_window
+from _nowindow import console_python, detached_no_window, hidden_startup_info
+from _runtime_state import atomic_json, process_identity, startup_lock
 import sys
 import pathlib
 import secrets
@@ -33,17 +34,6 @@ from _env_driver import (                                     # noqa: E402
 
 DEFAULT_CHROME = str(CHROME_EXE)
 DEFAULT_PROFILE = str(PROFILE_DIR)
-
-# Names shown in the panel. `--proxy system` means "follow the OS proxy", which
-# is the only per-environment exit that works without a helper relay: Chrome
-# cannot put credentials in a proxy URL, so an authenticated SOCKS5 upstream needs
-# fp_proxy's local relay first (see PROXY.md).
-DEFAULT_ENVS = [
-    ("fb-008", "fb-008 运营号", "system"),
-    ("fb-012", "fb-012 素材号", "system"),
-    ("fb-020", "fb-020 测试号", "direct"),
-]
-
 
 def ensure_proxies_bound(profile: pathlib.Path) -> None:
     """Make sure every environment still points at its own relay before a window is shown."""
@@ -78,6 +68,19 @@ def ensure_proxies_bound(profile: pathlib.Path) -> None:
 
 def running_browser_for(profile: Path) -> int | None:
     """PID of a chrome process started with this user-data-dir, if any."""
+    try:
+        saved = json.loads((DATA_ROOT / ".env-ui-port.json").read_text(encoding="utf-8"))
+        identity = process_identity(int(saved.get("pid") or 0))
+        if not identity.get("alive"):
+            return None
+        if saved.get("process_started"):
+            valid = (saved.get("profile_root") == str(profile.resolve()) and
+                     saved["process_started"] == identity.get("started") and
+                     Path(identity.get("image", "")).resolve() == Path(DEFAULT_CHROME).resolve())
+            return int(saved["pid"]) if valid else None
+    except (OSError, ValueError, TypeError):
+        return None
+    # A legacy record gets one migration lookup; normal starts use native APIs.
     script = (
         "Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\" | "
         "Where-Object { $line = $_.CommandLine; $line -like '*--user-data-dir="
@@ -109,7 +112,6 @@ def recorded_cdp_port(pid: int) -> int | None:
 
 AUTOMATION_PORT_FILE = DATA_ROOT / ".lan-automation-port"
 AUTOMATION_TOKEN_FILE = DATA_ROOT / ".lan-automation-token"
-AUTOMATION_PORT = 8798
 
 
 def automation_switches() -> list[str]:
@@ -124,8 +126,11 @@ def automation_switches() -> list[str]:
     if not token:
         token = secrets.token_hex(16)
         AUTOMATION_TOKEN_FILE.write_text(token, encoding="utf-8")
-    AUTOMATION_PORT_FILE.write_text(str(AUTOMATION_PORT), encoding="utf-8")
-    return [f"--lan-automation-port={AUTOMATION_PORT}",
+    # Each profile owns its transport; a development browser or another
+    # installation must not claim the installed product's fixed port.
+    port = free_port()
+    AUTOMATION_PORT_FILE.write_text(str(port), encoding="utf-8")
+    return [f"--lan-automation-port={port}",
             f"--lan-automation-token={token}"]
 
 def main() -> int:
@@ -136,12 +141,52 @@ def main() -> int:
     ap.add_argument("--no-automation", action="store_true",
                     help="do not open the in-browser automation socket")
     ap.add_argument("--skip-envs", action="store_true",
-                    help="do not create the default environments")
+                    help=argparse.SUPPRESS)  # Legacy compatibility; startup never seeds environments.
+    ap.add_argument("--product-startup", action="store_true")
     args = ap.parse_args()
 
     profile = Path(args.profile)
     profile.mkdir(parents=True, exist_ok=True)
+    # Service helpers must resolve the same native profile before Chrome starts.
+    # Without this, a fresh user-data-dir can be mistaken for Profile::GetPath(),
+    # leaving initial commands and the account vault one directory too high.
+    (profile / "Default").mkdir(parents=True, exist_ok=True)
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
+
+    from env_startup_check import ensure_service
+    check_service = ensure_service(profile)
+    startup_check_switches = [f"--lan-env-check-port={check_service['port']}"]
+
+    if args.product_startup:
+        started = time.monotonic()
+        log_path = DATA_ROOT / "logs" / "startup-services.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("ab") as log:
+            subprocess.Popen(
+                [console_python(), "-B", str(HERE / "_startup_services.py"), "--profile", str(profile)],
+                cwd=str(HERE), stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                creationflags=detached_no_window(), startupinfo=hidden_startup_info())
+        with startup_lock(DATA_ROOT / ".product-browser-startup.lock", timeout=35):
+            existing = running_browser_for(profile)
+            browser = EnvBrowser(args.chrome, user_data_dir=profile, window=args.windows,
+                cdp_port=(recorded_cdp_port(existing) or 9333) if existing else None,
+                extra_argv=[] if existing else startup_check_switches + ([] if args.no_automation else automation_switches()) + ["--lan-product-startup"])
+            if not existing and not browser.start(timeout=30):
+                print("Browser failed to start; see the browser log.", flush=True)
+                return 2
+            seconds = round(time.monotonic() - started, 3)
+            atomic_json(DATA_ROOT / ".startup-browser.json", {
+                "ok": True, "pid": existing or browser.chrome_pid, "seconds": seconds,
+                "reused": bool(existing), "log": str(browser.log_file), "recorded_at": time.time()})
+        print(f"Browser ready in {seconds:.3f}s; assistant initializes in background.", flush=True)
+        # Opening the shortcut raises only the product window. No fixture/default
+        # environments, global proxy scan or assistant readiness blocks the splash.
+        for hwnd, title in windows_of_process(existing or browser.chrome_pid):
+            rect = window_rect(hwnd)
+            if rect[2] > 400 and rect[3] > 300:
+                focus_window(hwnd)
+                break
+        return 0
 
     # An environment whose relay died shows "You're offline" even though the machine is online,
     # because its partition proxies to 127.0.0.1:<dead port>. Check before launching.
@@ -181,7 +226,7 @@ def main() -> int:
     else:
         browser = EnvBrowser(args.chrome, user_data_dir=profile,
                              window=args.windows,
-                             extra_argv=([] if args.no_automation else automation_switches()) +
+                             extra_argv=startup_check_switches + ([] if args.no_automation else automation_switches()) +
                                         ([] if args.no_automation else ["--lan-product-startup"]))
     ensure_proxies_bound(profile)
     if existing:
@@ -200,21 +245,8 @@ def main() -> int:
         return 2
     print(f"  pid: {browser.chrome_pid}")
 
-    if not args.skip_envs:
-        state = browser.state()
-        known = {e.get("env_id") for e in state.get("envs", [])}
-        for env_id, display, proxy in DEFAULT_ENVS:
-            if env_id in known:
-                print(f"  env {env_id}: already defined")
-                continue
-            result = browser.cli("create", env_id, "--display-name", display,
-                                 "--proxy", proxy)
-            print(f"  env {env_id}: {result}")
-
-    state = browser.state()
-    first = state.get("active") or (DEFAULT_ENVS[0][0] if not args.skip_envs else None)
-    if first and state.get("active") != first:
-        print(f"  activate {first}: {browser.activate(first)}")
+    # Only explicit user/API actions may create or activate an environment.
+    # Never repopulate an empty profile or infer demo data from environment names.
     print("  panel:", browser.cli("panel"))
 
     # Bring it to the front so the operator sees it without hunting for it.

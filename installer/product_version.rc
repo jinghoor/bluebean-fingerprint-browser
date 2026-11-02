@@ -1,0 +1,34 @@
+#pragma code_page(65001)
+#ifndef BlueBeanVersionText
+#define BlueBeanVersionText "1.0.4"
+#endif
+#ifndef BlueBeanVersionNumber
+#define BlueBeanVersionNumber 1,0,4,0
+#endif
+
+1 VERSIONINFO
+FILEVERSION BlueBeanVersionNumber
+PRODUCTVERSION BlueBeanVersionNumber
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", L"\x84dd\x8c46\x52a9\x624b\0"
+            VALUE "FileDescription", L"\x84dd\x8c46\x6307\x7eb9\x6d4f\x89c8\x5668\0"
+            VALUE "FileVersion", BlueBeanVersionText
+            VALUE "ProductName", L"\x84dd\x8c46\x6307\x7eb9\x6d4f\x89c8\x5668\0"
+            VALUE "ProductVersion", BlueBeanVersionText
+            VALUE "LegalCopyright", L"Copyright (c) 2026 \x4f55\x9633\x9e3f\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

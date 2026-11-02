@@ -221,15 +221,19 @@ class EnvBrowser:
                 *self.extra_argv,
                 "about:blank"]
         env = dict(os.environ)
-        env.setdefault("LAN_PRODUCT_HOME", str(HERE))
-        self.proc = subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL)
+        # Native controls must resolve the same per-user state as the services.
+        env["LAN_PRODUCT_HOME"] = str(DATA_ROOT)
+        self.proc = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.chrome_pid = self.proc.pid
         # Record the port: it is randomly assigned, and without this every verification script has to scrape the
         # command line (the previous round lost it after a restart and the page could not be inspected at all).
         try:
             Path(DATA_ROOT / '.env-ui-port.json').write_text(
-                json.dumps({'port': self.cdp_port, 'pid': self.chrome_pid}), encoding='utf-8')
+                json.dumps({'port': self.cdp_port, 'pid': self.chrome_pid,
+                            'profile_root': str(self.user_data_dir.resolve()),
+                            'process_started': __import__('_runtime_state').process_identity(self.chrome_pid).get('started')}),
+                encoding='utf-8')
         except OSError:
             pass
         return self.wait_cdp(timeout)

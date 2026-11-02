@@ -132,7 +132,7 @@ void EnvSidePanelCoordinator::ClosePanel() {
 }
 
 void EnvSidePanelCoordinator::ShowPanel() {
-  if (!browser_) {
+  if (!browser_ || browser_->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
     return;
   }
   // Docking the workbench here is not viable: Chrome's side panel is ~282 px and DSH folds its sidebar into an icon
@@ -143,7 +143,7 @@ void EnvSidePanelCoordinator::ShowPanel() {
 }
 
 void EnvSidePanelCoordinator::TogglePanel() {
-  if (!browser_) {
+  if (!browser_ || browser_->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
     return;
   }
   LOG(ERROR) << "ENVPANEL: toggling the assistant layer (docking is not viable at this width)";

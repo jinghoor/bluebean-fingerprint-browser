@@ -18,6 +18,7 @@ CONFIG = {key: text(label) for key, label in {
     'expected_exit_ip':'预期出口IP（选填）', 'locale':'区域语言，例如zh-CN',
     'accept_languages':'请求语言，例如zh-CN,zh', 'fingerprint_seed':'指纹种子；新建默认独立随机生成',
     'start_url':'首次打开的完整http(s)网址', 'homepage':'新标签页完整http(s)网址'}.items()}
+CONFIG['ip_mode'] = {**enum('static', 'dynamic'), 'description': '静态 IP 在首次启动时核对已保存出口；动态 IP 不因出口变化提示风险'}
 ACCOUNT = obj({**{k: text(v) for k,v in {
     'account_id':'编辑时必填现有账号编号；新建省略', 'client_id':'新建幂等编号；省略由工具生成',
     'platform_id':'目录中的平台id，例如facebook、instagram、amazon或custom',
@@ -54,7 +55,7 @@ TOOLS = [
        'env_id':ID,'account_id':text(),'revision':{'type':'integer','minimum':1},
        'accounts':array(ACCOUNT,100),'field':enum('password','otp_secret'),'code':text('本次6–8位验证码，不保存')},['env_id']),
  tool('environment_proxy_test','proxy-test','真实测试代理出口、HTTPS往返延迟、城市、时区及IP。可传env_id读取该环境代理，或传proxy测试尚未保存的节点；失败不能说成功，地理信息不可用需如实说明。',
-      {'env_id':ID,'proxy':CONFIG['proxy'],'expected_exit_ip':text()}),
+      {'env_id':ID,'proxy':CONFIG['proxy'],'expected_exit_ip':text(),'ip_mode':CONFIG['ip_mode']}),
  tool('environment_proxy_job','proxy-job','检测两个及以上环境的代理优先使用本工具。start传env_ids，status/cancel传job_id。自动短暂等待，小批次可直接返回最终结果；只检测不修改代理。仍运行时按next_action查询。',
       {'action':enum('start','status','cancel'),'env_ids':IDS,'job_id':text(),'request_id':text(),'wait_ms':WAIT}),
  tool('environment_import','import','批量新建环境、导入代理、多账号。生成示例：{action:preview,kind:environments,generate:{prefix:运营,start:1,count:4,group:海外}}；直连不用提供proxies。CSV预览传kind和text。预览校验后用{action:apply,job_id:预览返回编号}；小批次通常直接完成，仍运行按next_action查询。每批最多200行，保留已成功条目。',

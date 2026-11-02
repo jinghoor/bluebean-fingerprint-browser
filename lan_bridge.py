@@ -17,6 +17,7 @@ import argparse
 import json
 from _nowindow import no_window
 import logging
+import os
 import secrets
 import sys
 import threading
@@ -24,9 +25,10 @@ import time
 from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from _runtime_state import atomic_json
 
 sys.path.insert(0, str(Path(__file__).parent))
-from bluebean_paths import DATA_ROOT, PROFILE_DIR
+from bluebean_paths import APP_ROOT, DATA_ROOT, PROFILE_DIR
 from browser_backend import BrowserBackend                           # noqa: E402
 from dsh_sessions import SessionManager                              # noqa: E402
 from session_browser_scope import SessionBrowserScopes               # noqa: E402
@@ -53,7 +55,7 @@ DEFAULT_PERMISSIONS = {
 def load_token(port_hint: int) -> tuple[int, str]:
     if TOKEN_FILE.exists():
         data = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
-        return int(data.get("port", port_hint)), data["token"]
+        return port_hint, data["token"]
     token = secrets.token_urlsafe(32)
     TOKEN_FILE.write_text(json.dumps({"port": port_hint, "token": token},
                                      indent=1), encoding="utf-8")
@@ -621,42 +623,39 @@ def workbench_watchdog(bridge: "Bridge") -> None:
     A dead workbench behind a live-looking layer is the worst failure this product can show; this loop restarts it and
     re-points the overlay so the operator never sees a stale page.
     """
-    import subprocess
-    import sys as _sys
-    import time as _time
+    import _dsh_web
+    import env_cli
 
-    import pathlib as _pathlib
-
-    here = _pathlib.Path(__file__).resolve().parent
-    state_file = DATA_ROOT / ".dsh-web.json"
-    script = here / "_dsh_web.py"
-    last_port = ""
+    failures = 0
+    pause = 15.0
     while True:
-        _time.sleep(15.0)
+        time.sleep(pause)
         try:
-            probe = subprocess.run([_sys.executable, str(script), "--check"],
-                                   capture_output=True, text=True, timeout=60,
-                                   creationflags=no_window())
-            healthy = '"healthy": true' in (probe.stdout or "")
-            if not healthy:
-                LOG.warning("watchdog: workbench unhealthy, restarting")
-                subprocess.run([_sys.executable, str(script), "--start"],
-                               capture_output=True, text=True, timeout=300,
-                               creationflags=no_window())
-                _time.sleep(3.0)
-            state = json.loads(state_file.read_text(encoding="utf-8"))
-            port = str(state.get("port") or "")
-            url = state.get("url") or ""
-            if not port or not url or port == last_port:
+            state = _dsh_web.load_state()
+            healthy = _dsh_web.owns_state(state) and _dsh_web.probe(str(state.get("url") or ""))[0]
+            if healthy:
+                failures, pause = 0, 15.0
                 continue
-            last_port = port
-            import env_cli
+            failures += 1
+            # Give startup, transient load and active agent turns time to finish.
+            if failures < 3 or bridge.sessions.turn_started:
+                continue
+            gateway = getattr(bridge, "environment_agent", None)
+            if gateway and gateway.busy():
+                continue
+            LOG.warning("workbench health unavailable; recovery attempt %s", failures - 2)
+            replacement = _dsh_web.ensure()
+            if not replacement.get("ok"):
+                pause = min(300.0, pause * 2)
+                continue
             profile = env_cli.resolve_profile_dir(bridge.udd)
-            reply = env_cli.send(profile, {"command": "overlay", "on": True, "url": url}, 40)
-            LOG.info("watchdog: layer pointed at the workbench on %s -> ok=%s",
-                     port, reply.get("ok"))
-        except Exception as exc:                                   # noqa: BLE001
-            LOG.warning("watchdog: %s: %s", type(exc).__name__, exc)
+            # Reconnect without reopening a panel the user deliberately hid.
+            env_cli.send(profile, {"command": "overlay", "mode": "refresh",
+                                   "url": replacement["url"]}, 3)
+            failures, pause = 0, 15.0
+        except Exception as exc:
+            pause = min(300.0, pause * 2)
+            LOG.warning("workbench recovery deferred: %s", type(exc).__name__)
 
 
 def start_workbench_watchdog(bridge: "Bridge") -> None:
@@ -735,6 +734,9 @@ def make_handler(bridge: Bridge, token: str):
                 return
             if self.path == "/v1/health":
                 self._send({"ok": True, "protocol": PROTOCOL_VERSION,
+                            "pid": os.getpid(), "data_root": str(DATA_ROOT.resolve()),
+                            "app_root": str(APP_ROOT.resolve()),
+                            "profile_root": str(PROFILE_DIR.resolve()),
                             "env_management_api": 2,
                             "environment_status_api": 1,
                             "environment_activity_api": 2,
@@ -852,7 +854,7 @@ def make_handler(bridge: Bridge, token: str):
                         return
                     allowed = ("display_name", "group", "tags", "notes", "proxy",
                                "expected_exit_ip", "locale", "accept_languages",
-                               "fingerprint_seed", "start_url", "homepage")
+                               "fingerprint_seed", "start_url", "homepage", "ip_mode")
                     command = {"command": "create", "env_id": env_id}
                     for key in allowed:
                         value = payload.get(key)
@@ -1070,7 +1072,19 @@ def main() -> int:
     threading.Thread(target=watch_sessions,
                      args=(bridge, DATA_ROOT / ".dsh-sdk", profile_dir),
                      daemon=True).start()
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(bridge, token))
+    # Never reuse another installation's socket on Windows.
+    class PrivateHTTPServer(ThreadingHTTPServer):
+        allow_reuse_address = False
+        def server_bind(self):
+            import socket
+            if os.name == "nt":
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            super().server_bind()
+    server = PrivateHTTPServer(("127.0.0.1", port), make_handler(bridge, token))
+    port = server.server_port
+    atomic_json(TOKEN_FILE, {"port": port, "token": token, "pid": os.getpid(),
+                            "app_root": str(APP_ROOT.resolve()),
+                            "data_root": str(DATA_ROOT.resolve())})
     print(f"lan-bridge listening on http://127.0.0.1:{port} "
           f"(token in {TOKEN_FILE.name})", flush=True)
     start_workbench_watchdog(bridge)

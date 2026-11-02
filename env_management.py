@@ -27,7 +27,7 @@ API_VERSION = 2
 SCHEMA_VERSION = 1
 FIELDS = ('env_id', 'display_name', 'group', 'tags', 'notes', 'proxy',
           'expected_exit_ip', 'locale', 'accept_languages', 'fingerprint_seed',
-          'start_url', 'homepage')
+          'start_url', 'homepage', 'ip_mode')
 RESTART_FIELDS = {'proxy', 'locale', 'accept_languages', 'fingerprint_seed'}
 LIMITS = {'display_name': 120, 'group': 80, 'tags': 300, 'notes': 2048,
           'fingerprint_seed': 128, 'locale': 40, 'accept_languages': 200}
@@ -41,7 +41,7 @@ class ManagementError(ValueError):
 
 
 def definition(row):
-    return {key: str(row.get(key) or '') for key in FIELDS}
+    return {key: str(row.get(key) or ('static' if key == 'ip_mode' else '')) for key in FIELDS}
 
 
 def ip_key(value):
@@ -110,6 +110,8 @@ def validate_definition(payload, current=None):
             r'[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*(?:\s*,\s*[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*)*',
             row['accept_languages']):
         errors['accept_languages'] = '用逗号分隔语言，例如 zh-CN,zh,en-US,en'
+    if row['ip_mode'] not in ('static', 'dynamic'):
+        errors['ip_mode'] = '请选择静态 IP 或动态 IP'
     if row['expected_exit_ip']:
         try:
             ipaddress.ip_address(row['expected_exit_ip'])
@@ -217,6 +219,8 @@ class EnvironmentManagement(WorkspaceServices):
             probe = probes.get((proxy, expected)) or {} if env in running_ids else {}
             latest = probe if probe.get('at', 0) > (test.get('at', 0) if fresh else 0) else test if fresh else {}
             network = latest.get('status', 'unchecked')
+            if row.get('ip_mode') == 'dynamic' and network == 'mismatch':
+                network = 'success'
             agent = agents.get(env, {})
             if agent.get('network_error') and agent.get('network_error_at', agent.get('updated_at', 0)) > latest.get('at', 0):
                 network = 'failed'
@@ -762,9 +766,11 @@ class EnvironmentManagement(WorkspaceServices):
         from lan_bridge import validate_proxy_config
         proxy = validate_proxy_config(str(payload.get('proxy', '')).strip())
         expected = str(payload.get('expected_exit_ip', '')).strip()
+        ip_mode = str(payload.get('ip_mode', 'static'))
         if payload.get('env_id') and 'expected_exit_ip' not in payload:
             row = next((e for e in self._state()['envs'] if e['env_id'] == payload['env_id']), None)
             expected = row.get('expected_exit_ip', '') if row else ''
+            ip_mode = row.get('ip_mode', 'static') if row else ip_mode
         if expected:
             try:
                 expected = str(ipaddress.ip_address(expected))
@@ -779,7 +785,7 @@ class EnvironmentManagement(WorkspaceServices):
                   'expected_exit_ip': expected,
                   'status': 'success' if result.get('ok') else 'failed',
                   'elapsed_ms': round((time.monotonic() - started) * 1000)}
-        if result.get('ok') and expected and ipaddress.ip_address(result['exit_ip']) != ipaddress.ip_address(expected):
+        if result.get('ok') and ip_mode != 'dynamic' and expected and ipaddress.ip_address(result['exit_ip']) != ipaddress.ip_address(expected):
             result.update(ok=False, status='mismatch',
                           error='代理已连接，但出口 IP 与预期不一致，请核对代理线路')
         if result.get('ok') and not payload.get('env_id'):

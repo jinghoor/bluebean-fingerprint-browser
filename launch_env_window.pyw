@@ -21,8 +21,10 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 TARGET = HERE / "open_env_window.py"
 LOCAL_APP_DATA = pathlib.Path(os.environ.get("LOCALAPPDATA") or pathlib.Path.home() / "AppData" / "Local")
-PRODUCT_DATA = LOCAL_APP_DATA / "BlueBean Fingerprint Browser" / "Data"
+PRODUCT_DATA = pathlib.Path(os.environ.get("BLUEBEAN_DATA") or
+                           LOCAL_APP_DATA / "BlueBean Fingerprint Browser" / "Data")
 LOG = PRODUCT_DATA / "logs" / "shortcut-launch.log"
+FIRST_RUN_MARKER = PRODUCT_DATA / ".first-run-runtime-ready-v1.json"
 
 # The installed runtime must not inherit another Python installation's paths.
 for _python_variable in ("PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE"):
@@ -62,8 +64,12 @@ def create_splash(tk, ttk):
         canvas.create_image(width // 2, 87, image=logo)
         canvas.create_text(width // 2, 177, text="蓝豆指纹浏览器",
                            fill="#1f2937", font=("Microsoft YaHei UI", 17, "bold"))
-        canvas.create_text(width // 2, 211, text="正在启动中",
+        canvas.create_text(width // 2, 211, text=("正在启动中" if FIRST_RUN_MARKER.is_file()
+                                               else "首次启动，正在准备运行环境"),
                            fill="#64748b", font=("Microsoft YaHei UI", 11))
+        if not FIRST_RUN_MARKER.is_file():
+            canvas.create_text(width // 2, 235, text="仅首次需要准备运行环境，后续启动将自动跳过",
+                               fill="#64748b", font=("Microsoft YaHei UI", 9))
 
         # A small indeterminate track communicates progress without a timer-heavy widget.
         left, right, top, bottom = 86, width - 86, 258, 264
@@ -127,12 +133,16 @@ def main() -> int:
     except ImportError:
         return run_target()
 
+    print("startup notice: " + ("normal-startup" if FIRST_RUN_MARKER.is_file()
+                                else "first-run-runtime-preparation"), flush=True)
     root = create_splash(tk, ttk)
     if root is None:
         return run_target()
 
     result: dict[str, int] = {}
     started_at = time.monotonic()
+    started_epoch = time.time()
+    first_run = not FIRST_RUN_MARKER.is_file()
 
     def worker() -> None:
         result["code"] = run_target()
@@ -140,6 +150,18 @@ def main() -> int:
 
     def finish_when_ready() -> None:
         if result.get("done") and time.monotonic() - started_at >= 0.8:
+            if first_run and result.get("code") == 0 and not FIRST_RUN_MARKER.is_file():
+                failed = False
+                try:
+                    import json
+                    status = json.loads((PRODUCT_DATA / ".startup-services.json").read_text(encoding="utf-8"))
+                    failed = (status.get("started_at", 0) >= started_epoch - 1 and
+                              status.get("status") in ("failed", "bridge-unavailable", "workbench-unavailable", "attachment-unavailable"))
+                except (OSError, ValueError):
+                    pass
+                if not failed and time.monotonic() - started_at < 90:
+                    root.after(100, finish_when_ready)
+                    return
             root.destroy()
             return
         root.after(80, finish_when_ready)
@@ -151,7 +173,7 @@ def main() -> int:
 
 
 def run_target() -> int:
-    sys.argv = [str(TARGET), *sys.argv[1:]]
+    sys.argv = [str(TARGET), "--product-startup", *sys.argv[1:]]
     try:
         runpy.run_path(str(TARGET), run_name="__main__")
     except SystemExit as exit_signal:

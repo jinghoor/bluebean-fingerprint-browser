@@ -60,6 +60,10 @@ struct EnvProfile {
   // reported instead of silently accepted -- session-sticky proxies expire.
   std::string expected_exit_ip;
 
+  // Static exits require confirmation when they change. Dynamic exits are still
+  // checked for connectivity, but changing addresses do not require confirmation.
+  std::string ip_mode = "static";
+
   // Non-empty once the environment has been activated at least once.
   bool used = false;
 

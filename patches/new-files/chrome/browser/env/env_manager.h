@@ -29,6 +29,8 @@
 class Profile;
 namespace content {
 class WebContents;
+class NavigationHandle;
+class NavigationThrottleRegistry;
 }
 
 namespace env {
@@ -132,6 +134,9 @@ class EnvManager : public KeyedService, public TabStripModelObserver {
   // "define then activate" works in one command. Backs `activate --url`.
   bool NavigateEnv(const std::string& env_id, const std::string& url,
                    std::string* error);
+
+  static void AddStartupCheckThrottle(content::NavigationThrottleRegistry& registry);
+  bool BlockStartupNavigation(content::NavigationHandle* handle);
 
   // Resolves a StoragePartition path to the proxy rules of the environment that
   // owns it: "socks5://host:port", "http://host:port", or "direct". Returns an
@@ -266,6 +271,22 @@ class EnvManager : public KeyedService, public TabStripModelObserver {
 
   // Returns the environment id recorded on `contents`, or empty.
   static std::string EnvIdOf(content::WebContents* contents);
+
+  struct StartupGate {
+    std::string key;
+    std::string url;
+    std::string destination;
+    std::string proxy;
+    std::string expected_ip;
+    bool unlocked = false;
+  };
+  int StartupCheckPort() const;
+  void EnsureStartupGate(const EnvProfile& spec);
+  bool StartupCheckBlocked(const std::string& env_id) const;
+  void ShowStartupCheck(const std::string& env_id);
+  void CloseStartupEnvironment(const std::string& env_id);
+  void HandleStartupCheck(const base::DictValue& command, std::string* result);
+  std::map<std::string, StartupGate> startup_gates_;
 
 
   raw_ptr<Profile> profile_;

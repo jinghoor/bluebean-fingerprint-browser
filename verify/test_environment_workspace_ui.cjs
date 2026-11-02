@@ -1,0 +1,196 @@
+// DSH page journey backed only by the disposable fixture profile.
+const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+const {spawn}=require('node:child_process');const assert=require('node:assert/strict');
+const {chromium,request}=require('C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const ROOT=path.resolve(__dirname,'..');
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+(async()=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'bluebean-workspace-ui-')),info=path.join(temp,'server.json');
+ const child=spawn('python',[path.join(__dirname,'env_management_server.py'),info],{cwd:ROOT,windowsHide:true,stdio:['ignore','pipe','pipe']});
+ let browser,api;const errors=[];
+ try{
+  for(let i=0;i<100&&!fs.existsSync(info);i++)await sleep(50);
+  const fixture=JSON.parse(fs.readFileSync(info,'utf8')),base='http://127.0.0.1:'+fixture.port;
+  api=await request.newContext({extraHTTPHeaders:{Authorization:'Bearer isolated-tests'}});
+  browser=await chromium.launch({executablePath:'E:/chromium/src/out/Release-pgo/chrome.exe',headless:true,args:['--no-first-run','--disable-extensions']});
+  const page=await browser.newPage({viewport:{width:1280,height:1000}});page.on('pageerror',e=>errors.push(e.message));await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{window.fixtureClipboard=value;}}}));
+  const evidence=path.join(ROOT,'.work/env-workspace-v3');fs.mkdirSync(evidence,{recursive:true});
+  await page.route('**/api/**',route=>/\/(describe|list|inventory|syncInspectManifest|modelCatalog|catalog|listProviders)$/.test(new URL(route.request().url()).pathname)?route.continue():route.fulfill({json:{ok:false,error:'Isolated test blocked'}}));
+  await page.route('**/plugins/**',async route=>{if(new URL(route.request().url()).pathname.endsWith('/events'))return route.abort();const res=await route.fetch(),body=await res.text();return body.includes("id: 'lan-seats'")?route.fulfill({response:res,body:fs.readFileSync(path.join(ROOT,'lan_seats/lib/client.js'),'utf8')}):route.fulfill({response:res});});
+  let multiActivity=null;
+  await page.route('http://127.0.0.1:8799/**',async route=>{const u=new URL(route.request().url());if(u.pathname==='/v1/lan/manage/status')return route.fulfill({json:{ok:true,live_status:'ready',active:'fb-020',active_session:'fb-020',states:{'fb-008':{state:'running',label:'运行中',running:true,network:'unchecked'},'fb-012':{state:'network-error',label:'网络异常',running:true,network_warning:true},'fb-020':multiActivity||{state:'agent-complete',label:'Agent 操作完成',running:true}}}});if(u.pathname.startsWith('/v1/lan/manage/')){const res=await api.post(base+u.pathname,{data:route.request().postDataJSON()||{}});return route.fulfill({response:res});}return route.fulfill({json:{ok:true,envs:[],active:'',scope_env_ids:[]}});});
+  const dsh=JSON.parse(fs.readFileSync(path.join(ROOT,'.dsh-web.json'),'utf8')).url;
+  await page.goto(dsh);await page.getByText('我的环境',{exact:true}).click();await page.locator('.lm-row').first().waitFor();
+  assert.equal(await page.locator('.lm-row').count(),3);
+  assert.equal(await page.locator('.lm-row img[data-platform-icon="environment"]').count(),3);
+  await page.locator('.lm-row[data-env="fb-020"] .lan-env-sidebar-dot[data-state="agent-complete"]').waitFor();
+  assert.equal(await page.locator('.lm-row[data-env="fb-020"] .lan-current-badge').textContent(),'当前');
+  assert.equal(await page.locator('.lm-row[data-env="fb-008"] .lan-env-sidebar-dot[data-state="running"]').count(),1);
+  assert.equal(await page.locator('.lm-row[data-env="fb-012"] .lan-env-sidebar-dot[data-state="network-error"]').count(),1);
+  await page.screenshot({path:path.join(evidence,'workspace-list.png'),animations:'disabled'});
+  const multiRow=page.locator('.lm-row[data-env="fb-020"]'),multiHeight=(await multiRow.boundingBox()).height;
+  multiActivity={state:'agent-running',label:'Agent 正在操作',running:true,agent_active_count:3,agent_completed_count:1,agent_failed_count:1,agent_warning:true,network_warning:true};
+  await multiRow.locator('.lan-env-sidebar-dot[data-state="agent-running"]').waitFor();
+  assert.match(await multiRow.locator('.lan-runtime-indicator').getAttribute('title'),/3 项进行中，1 项完成，1 项失败/);
+  assert.equal((await multiRow.boundingBox()).height,multiHeight,'multi-operation summaries must preserve row height');
+  await page.screenshot({path:path.join(ROOT,'.work/environment-runtime-status/multi-operation-list.png'),animations:'disabled'});
+  multiActivity=null;
+  await multiRow.locator('.lan-env-sidebar-dot[data-state="agent-complete"]').waitFor();
+
+  for(const width of [1280,800]){
+   await page.setViewportSize({width,height:1000});
+   const geometry=await page.locator('.lm-row[data-env="fb-020"]').evaluate(row=>{
+    const name=row.querySelector('.lm-name'),original=name.textContent;
+    const measure=()=>({badge:row.querySelector('.lan-current-badge').getBoundingClientRect().x,dot:row.querySelector('.lan-env-sidebar-dot').getBoundingClientRect().x,height:row.getBoundingClientRect().height});
+    name.textContent='短';const short=measure();name.textContent='Facebook美国跨境运营环境LongEnvironmentName'.repeat(8);const long=measure(),truncated=name.scrollWidth>name.clientWidth;name.textContent=original;return{short,long,truncated};
+   });
+   assert.deepEqual(geometry.short,geometry.long,'environment name length must not displace current/status columns at '+width);
+   assert.ok(geometry.truncated);
+  }
+  await page.setViewportSize({width:1280,height:1000});
+  const longName=page.locator('.lm-row[data-env="fb-020"] .lm-name'),originalName=await longName.textContent();
+  await longName.evaluate(el=>{el.textContent='Facebook美国跨境运营环境 · 这是一个很长很长的环境名称';});
+  await page.screenshot({path:path.join(ROOT,'.work/environment-runtime-status/long-names-list.png'),animations:'disabled'});
+  await longName.evaluate((el,text)=>{el.textContent=text;},originalName);
+
+  // Create a real environment through the editor and associate its proxy probe.
+  await page.getByRole('button',{name:'＋ 新建环境',exact:true}).click();
+  await page.locator('[name="display_name"]').fill('跨境运营验收环境');
+  await page.locator('[name="group"]').fill('海外运营');
+  await page.locator('[name="tags"]').fill('验收,社媒');
+  const createdId=await page.locator('[data-env-id]').getAttribute('data-env-id');
+  await page.getByRole('button',{name:'平台账号',exact:true}).click();
+  await page.getByRole('button',{name:'＋ 继续添加账号',exact:true}).click();
+  const newAccount=page.locator('.lm-account-edit').last();
+  const platformIds=await newAccount.locator('[name="account.platform_id"] option').evaluateAll(options=>options.map(o=>o.value).filter(Boolean));
+  assert.equal(platformIds.length,18,'all preset platforms including custom should be available');
+  for(const id of platformIds){
+   await newAccount.locator('[name="account.platform_id"]').selectOption(id);
+   const icon=newAccount.locator('.lm-platform-control img');
+   assert.equal(await icon.getAttribute('data-platform-icon'),id);
+   assert.ok((await icon.getAttribute('src')).startsWith('data:image/svg+xml'),'platform icons should be local, without network requests');
+   await icon.evaluate(img=>img.decode());
+  }
+  await newAccount.locator('[name="account.platform_id"]').selectOption('instagram');
+  await page.screenshot({path:path.join(evidence,'new-environment-platform-icons.png'),animations:'disabled'});
+  await newAccount.getByRole('button',{name:'移除此条',exact:true}).click();
+  await page.getByRole('button',{name:'网络代理',exact:true}).click();
+  await page.getByLabel('连接方式').selectOption('http');
+  await page.locator('[name="proxy.host"]').fill('127.0.0.1');
+  await page.locator('[name="proxy.port"]').fill('8899');
+  await page.locator('[name="expected_exit_ip"]').fill('203.0.113.10');
+  await page.getByRole('button',{name:'测试当前代理',exact:true}).click();
+  await page.locator('.lm-enter [role="status"]').filter({hasText:'通过 · 203.0.113.10'}).waitFor();
+  await page.getByRole('button',{name:'保存环境',exact:true}).click();
+  await page.locator('[data-environment-detail="'+createdId+'"]').waitFor();
+  let created;
+  for(let i=0;i<20&&!created?.proxy_test;i++){await sleep(50);created=(await(await api.post(base+'/v1/lan/manage/list',{data:{}})).json()).envs.find(e=>e.env_id===createdId);}
+  assert.equal(created.proxy,'http://127.0.0.1:8899');
+  assert.equal(created.proxy_test.status,'success');
+
+  await page.getByRole('button',{name:'返回上一级',exact:true}).click();
+  await page.getByRole('tab',{name:'账号',exact:true}).click();
+  const picker=page.getByRole('combobox',{name:'选择环境'});await picker.selectOption(createdId);const selectedEnv=await picker.inputValue();
+  await page.getByRole('button',{name:'＋ 添加账号',exact:true}).click();
+  const platform=page.locator('[name="account.platform_id"]');await platform.last().selectOption('facebook');
+  await page.locator('.lm-platform-control img[data-platform-icon="facebook"]').evaluate(img=>img.decode());
+  await page.locator('[name="account.login"]').last().fill('social@example.test');
+  await page.locator('[name="account.username"]').last().fill('social nickname');
+  await page.locator('[name="account.password"]').last().fill('fixture-social-secret');
+  await page.locator('[name="account.otp_secret"]').last().fill('JBSWY3DPEHPK3PXP');
+  await page.getByRole('button',{name:'＋ 继续添加账号'}).click();
+  await platform.last().selectOption('facebook');await page.locator('[name="account.login"]').last().fill('second-social@example.test');
+  await page.getByRole('button',{name:'＋ 继续添加账号'}).click();
+  await platform.last().selectOption('amazon');await page.locator('[name="account.login"]').last().fill('seller@example.test');
+  await page.locator('[name="account.password"]').last().fill('fixture-seller-secret');
+  await page.getByRole('button',{name:'保存全部账号'}).click();
+  await page.locator('[data-account]').filter({has:page.getByText('social@example.test',{exact:true})}).waitFor();
+  await page.locator('[data-account]').filter({hasText:'second-social@example.test'}).waitFor();
+  await page.locator('[data-account]').filter({hasText:'seller@example.test'}).waitFor();
+  const longLogin=page.locator('[data-account]').filter({hasText:'second-social@example.test'});
+  assert.equal(await longLogin.getByRole('button',{name:'复制 Facebook 登录账号',exact:true}).count(),1);
+  await longLogin.getByRole('button',{name:'复制 Facebook 登录账号',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.fixtureClipboard),'second-social@example.test');
+  const loginValue=longLogin.locator('.lm-account-login-value');
+  assert.equal(await loginValue.textContent(),'second-social@example.test');
+  assert.ok(await loginValue.evaluate(el=>getComputedStyle(el).overflowWrap==='anywhere'||getComputedStyle(el).wordBreak==='break-word'));
+  const firstAccount=page.locator('[data-account]').filter({has:page.getByText('social@example.test',{exact:true})});
+  await firstAccount.locator('img[data-platform-icon="facebook"]').evaluate(img=>img.decode());
+  await firstAccount.getByRole('button',{name:'账号详情',exact:true}).click();
+  await page.getByRole('dialog',{name:'账号详情',exact:true}).locator('img[data-platform-icon="facebook"]').evaluate(img=>img.decode());
+  const credentialDialog=page.getByRole('dialog',{name:'账号详情',exact:true});
+  await credentialDialog.locator('.lm-otp-code').filter({hasText:/^\d{6}$/}).waitFor();
+  assert.equal(await credentialDialog.locator('[data-password-value]').textContent(),'••••••••');
+  assert.equal(await credentialDialog.getByRole('button',{name:'复制密码',exact:true}).isDisabled(),true);
+  await credentialDialog.getByRole('button',{name:'查看密码',exact:true}).click();
+  await credentialDialog.locator('[data-password-value]').filter({hasText:'fixture-social-secret'}).waitFor();
+  assert.match(await credentialDialog.locator('.lm-otp-code').textContent(),/^\d{6}$/,'password and 2FA are independent');
+  await credentialDialog.getByRole('button',{name:'隐藏密码',exact:true}).click();
+  assert.equal(await credentialDialog.locator('[data-password-value]').textContent(),'••••••••');
+  await page.screenshot({path:path.join(evidence,'account-credentials.png'),animations:'disabled'});
+  await page.getByRole('button',{name:'编辑账号资料',exact:true}).click();
+  await page.getByRole('dialog',{name:'编辑平台账号',exact:true}).locator('.lm-platform-control img[data-platform-icon="facebook"]').evaluate(img=>img.decode());
+  await page.locator('[name="account.label"]').last().fill('日常运营主账号');
+  await page.getByRole('combobox',{name:'密码（已保存）操作'}).selectOption('clear');
+  await page.getByRole('button',{name:'保存全部账号'}).click();
+  await page.locator('[data-account]').filter({hasText:'日常运营主账号'}).waitFor();
+  await page.locator('.lan-manager').evaluate(el=>el.style.width='480px');
+  assert.equal(await page.locator('.lan-manager').evaluate(el=>el.scrollWidth>el.clientWidth+1),false);
+  await page.screenshot({path:path.join(evidence,'workspace-accounts-480.png'),animations:'disabled'});
+  const persisted=(await(await api.post(base+'/v1/lan/manage/accounts',{data:{env_id:selectedEnv}})).json()).accounts;
+  assert.equal(persisted.length,3);assert.equal(new Set(persisted.map(a=>a.session_env_id)).size,3);
+  assert.equal(persisted.find(a=>a.login==='social@example.test').has_otp,true);
+  assert.equal(persisted.find(a=>a.login==='social@example.test').has_password,false);
+  assert.equal(persisted.find(a=>a.login==='social@example.test').label,'日常运营主账号');
+  const cipher=fs.readFileSync(path.join(fixture.profile,'env-accounts-v2.dpapi.json'),'utf8');
+  for(const secret of ['fixture-social-secret','fixture-seller-secret','JBSWY3DPEHPK3PXP'])assert.ok(!cipher.includes(secret));
+
+  // Bulk maintenance and configuration-only backup/restore keep account data separate.
+  await page.getByRole('tab',{name:'环境',exact:true}).click();
+  const newRow=page.locator('.lm-row[data-env="'+createdId+'"]');
+  await newRow.locator('input[type=checkbox]').check();
+  await page.getByRole('button',{name:'批量操作',exact:true}).click();
+  await page.getByPlaceholder('新分组').fill('批量维护组');
+  await page.getByRole('button',{name:'设置分组',exact:true}).click();
+  await page.getByRole('button',{name:'关闭批量操作',exact:true}).click();
+  await page.getByRole('tab',{name:'备份与恢复',exact:true}).click();
+  await page.getByRole('button',{name:'环境配置备份',exact:true}).click();
+  const [backupDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'备份并导出配置',exact:true}).click()]);
+  const backupDocument=JSON.parse(fs.readFileSync(await backupDownload.path(),'utf8'));
+  assert.ok(backupDocument.envs.some(e=>e.env_id===createdId&&e.group==='批量维护组'));
+  assert.ok(!JSON.stringify(backupDocument).includes('fixture-seller-secret'));
+  const savedFile=path.join(temp,'environment-backup.json');fs.writeFileSync(savedFile,JSON.stringify(backupDocument));
+  const current=(await(await api.post(base+'/v1/lan/manage/list',{data:{}})).json()).envs.find(e=>e.env_id===createdId);
+  await api.post(base+'/v1/lan/manage/save',{data:{...current,group:'临时修改',revision:current.revision}});
+  await page.locator('input[type=file]').first().setInputFiles(savedFile);
+  const restoreDialog=page.getByRole('dialog',{name:'确认恢复内容',exact:true});
+  await restoreDialog.waitFor();
+  await restoreDialog.getByRole('checkbox',{name:/跨境运营验收环境/}).check();
+  await restoreDialog.getByRole('button',{name:'恢复所选环境',exact:true}).click();
+  await restoreDialog.waitFor({state:'hidden'});
+  assert.equal((await(await api.post(base+'/v1/lan/manage/list',{data:{}})).json()).envs.find(e=>e.env_id===createdId).group,'批量维护组');
+
+  // Proxy batch detection runs against a bounded, disposable test probe.
+  await page.getByRole('button',{name:'返回上一级',exact:true}).click();
+  await page.getByRole('tab',{name:'代理检测',exact:true}).click();
+  await page.getByRole('button',{name:'测试全部代理',exact:true}).click();
+  await page.getByText(/检测完成 · 1\/1/).waitFor({timeout:10000});
+  await page.getByText(/延迟 42 ms/).waitFor();
+  await page.getByText(/测试城市/).waitFor();
+  await page.getByRole('button',{name:'修改设置',exact:true}).first().click();
+  await page.locator('[data-editor-section="basic"]').waitFor();
+  await page.getByRole('button',{name:'平台账号',exact:true}).click();
+  await page.getByRole('button',{name:'＋ 继续添加账号',exact:true}).click();
+  const editAccount=page.locator('.lm-account-edit').last();
+  await editAccount.locator('[name="account.platform_id"]').selectOption('instagram');
+  await editAccount.locator('.lm-platform-control img[data-platform-icon="instagram"]').evaluate(img=>img.decode());
+  await page.screenshot({path:path.join(evidence,'edit-environment-platform-icons.png'),animations:'disabled'});
+  await editAccount.getByRole('button',{name:'移除此条',exact:true}).click();
+  await page.getByRole('button',{name:'返回上一级',exact:true}).click();
+  await page.getByRole('heading',{name:'代理检测结果',exact:true}).waitFor();
+  await page.getByRole('button',{name:'返回上一级',exact:true}).click();
+  assert.equal(await page.getByRole('tab',{name:'代理检测',exact:true}).getAttribute('aria-selected'),'true');
+  assert.deepEqual(errors,[]);
+  console.log('PASS: DSH workspace create/proxy/account/bulk/backup/restore flows run against a disposable profile; multi-account credentials remain encrypted.');
+ }finally{if(browser)await browser.close();if(api)await api.dispose();child.kill();fs.rmSync(temp,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exitCode=1;});
