@@ -6,7 +6,7 @@
 
 ## 许可
 
-蓝豆原创部分允许个人及其他非商业用途，许可详情见 [LICENSE](LICENSE)；第三方组件的许可见[第三方声明](THIRD_PARTY_NOTICES.md)。
+蓝豆原创部分的许可详情见 [LICENSE](LICENSE)；第三方组件的许可见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
 商业用途需事先取得书面授权，联系邮箱：**277030704@qq.com**。
 
