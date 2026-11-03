@@ -2,12 +2,6 @@
 
 蓝豆指纹浏览器是面向 Windows x64 的本地多环境浏览器。每个环境拥有独立的浏览器数据、账号、代理和指纹设置；环境与账号资料保存在本机。
 
-此仓库提供蓝豆原创应用代码、DSH 插件、Chromium 修改补丁、Windows 启动器和打包脚本。Chromium 内核源码及完整构建树不在本仓库中。安装包见 [GitHub Releases](https://github.com/jinghoor/bluebean-fingerprint-browser/releases)。
-
-## 许可
-
-蓝豆原创内容允许非商业使用，任何商业用途需事先取得书面授权，联系邮箱：**277030704@qq.com**。完整许可说明见 [LICENSE](LICENSE)，第三方组件的许可见[第三方声明](THIRD_PARTY_NOTICES.md)。
-
 ## 安装
 
 1. 从 Releases 下载 `BlueBean-Setup-1.0.4-Windows-x64.exe`。
@@ -44,3 +38,21 @@ python build-installer.py
 登录资料、Cookie、代理密码、API Key 和 DSH 会话属于本机用户数据，不应提交到版本库。应用默认把用户数据放在 `%LOCALAPPDATA%\BlueBean Fingerprint Browser\Data`。公开提交前请检查配置文件、日志、测试目录和构建产物。
 
 发现安全问题请勿在公开 issue 中附上令牌、密码、Cookie 或可复现的真实账号数据。
+
+## 源码说明
+
+本仓库提供蓝豆指纹浏览器的源码维护版本，适合希望自行构建、接入自己的服务或进行二次开发的用户。内容包括蓝豆原创应用代码、DSH 插件、Chromium 修改补丁、Windows 启动器和打包脚本；Chromium 内核源码及完整构建树需单独获取，构建方法见上文。
+
+如果你更希望开箱即用，或想优先体验最新功能，建议直接下载 [Releases](https://github.com/jinghoor/bluebean-fingerprint-browser/releases) 中的 **Windows x64 EXE 安装版**。安装包附带浏览器、DSH 及所需运行环境。构建版会持续维护，部分新功能可能先在构建版中发布，再逐步同步到源码维护版本。
+
+## License / 授权
+
+BlueBean Fingerprint Browser is **source-available for non-commercial use only**. You may read, fork, modify, and redistribute the original BlueBean materials and derivative works for personal, educational, research, evaluation, and other non-commercial purposes, provided you retain this notice and clear attribution to the original project and its maintainer contact.
+
+Commercial use requires prior written authorization. This includes business production use, selling the project or derivative works, operating paid hosted/SaaS/relay services, charging for deployment or maintenance, reselling access, or otherwise monetizing the project. For authorization, contact **277030704@qq.com**.
+
+If you fork, modify, redistribute, or publish derivative works, retain the project name **BlueBean Fingerprint Browser**, the maintainer contact **277030704@qq.com**, and a link to the original repository: [jinghoor/bluebean-fingerprint-browser](https://github.com/jinghoor/bluebean-fingerprint-browser). Clearly identify your changes and do not imply official endorsement.
+
+This is not an OSI-approved open source license because it restricts commercial use. These terms apply only to original BlueBean materials; third-party components, Chromium-derived code and patches, and third-party names and marks remain governed by their respective licenses and rights. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The software is provided "as is", without warranty of any kind.
+
+中文说明：蓝豆指纹浏览器的原创内容仅允许个人、学习、研究、评估等非商业用途使用；允许 fork、修改及继续公开发布，但必须保留本许可说明、项目名称 **蓝豆指纹浏览器**、维护联系邮箱 **277030704@qq.com** 以及[原项目链接](https://github.com/jinghoor/bluebean-fingerprint-browser)，并清楚标明修改，不得暗示获得官方背书。未经事先书面授权，不得用于企业生产运营、商业服务、付费托管、SaaS、中转服务、代部署或维护收费、转售访问权及其他商业化用途。第三方组件及 Chromium 衍生代码和补丁遵循各自许可；本软件按原样提供，不作任何担保。
