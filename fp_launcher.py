@@ -37,6 +37,7 @@ import signal
 import subprocess
 
 from _nowindow import no_window
+from _browser_launch import compatible_browser_argv
 import sys
 import time
 from pathlib import Path
@@ -360,7 +361,7 @@ def launch_argv(fp: "Fingerprint",
         # accidentally measure the marked-up string.
         args += ["--headless=new", f"--user-agent={_clean_user_agent()}"]
     args += extra or []
-    return args
+    return compatible_browser_argv(args)
 
 
 RELAY_STATE = ".fp_relay.json"
@@ -539,7 +540,7 @@ def build_argv(args, fp: Fingerprint, profile_dir: Path) -> list[str]:
     if not args.no_url:
         argv.append(args.url)
 
-    return argv
+    return compatible_browser_argv(argv)
 
 
 def prepare_profile(profile_dir: Path, fp: Fingerprint) -> None:

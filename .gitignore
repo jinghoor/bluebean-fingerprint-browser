@@ -6,6 +6,7 @@
 data/
 profiles/
 logs/
+.work/
 *.log
 *.dmp
 *.pyc

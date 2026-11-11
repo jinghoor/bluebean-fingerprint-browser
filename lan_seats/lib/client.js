@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
 
     const BASE = 'http://127.0.0.1:8799';
     const TOKEN = '__BLUEBEAN_BRIDGE_TOKEN_INJECTED_AT_RUNTIME__';
-    const BLUEBEAN_VERSION = '1.0.4'; // Synchronized with bluebean_version.VERSION at runtime.
+    const BLUEBEAN_VERSION = '1.0.5'; // Synchronized with bluebean_version.VERSION at runtime.
 
     function ProductInfo() {
       return h('div', { 'data-lan-product-info': '', style: { display: 'grid', gap: 5, fontSize: 12, lineHeight: '18px', userSelect: 'text' } },

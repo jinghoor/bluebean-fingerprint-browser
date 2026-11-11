@@ -29,6 +29,7 @@ import socket
 import subprocess
 
 from _nowindow import no_window
+from _browser_launch import compatible_browser_argv
 import sys
 import tempfile
 import time
@@ -183,6 +184,8 @@ class EnvBrowser:
         self.cdp_port = pick_port() if cdp_port is None else cdp_port
         self.proc: subprocess.Popen | None = None
         self.chrome_pid = 0
+        self.startup_error = ""
+        self.startup_exit_code: int | None = None
         # env id -> CDP target id. Captured when a tab is created for that
         # environment: nothing in the target list says which environment a page
         # belongs to, and putting a marker in the URL only works for URLs this
@@ -194,6 +197,8 @@ class EnvBrowser:
 
     # -- lifecycle ---------------------------------------------------------
     def start(self, timeout: float = 40.0) -> bool:
+        self.startup_error = ""
+        self.startup_exit_code = None
         for f in (self.log_file, Path(str(self.log_file) + ".old")):
             try:
                 f.unlink()
@@ -220,6 +225,7 @@ class EnvBrowser:
                 "--disable-renderer-backgrounding",
                 *self.extra_argv,
                 "about:blank"]
+        argv = compatible_browser_argv(argv)
         env = dict(os.environ)
         # Native controls must resolve the same per-user state as the services.
         env["LAN_PRODUCT_HOME"] = str(DATA_ROOT)
@@ -239,15 +245,27 @@ class EnvBrowser:
         return self.wait_cdp(timeout)
 
     def wait_cdp(self, timeout: float = 40.0) -> bool:
-        end = time.time() + timeout
-        while time.time() < end:
+        end = time.monotonic() + timeout
+        # Loopback readiness must never go through the user's system proxy.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        while time.monotonic() < end:
+            if self.proc is not None:
+                code = self.proc.poll()
+                if code is not None:
+                    self.startup_exit_code = code
+                    self.startup_error = f"Browser exited before startup (exit code {code}, 0x{code & 0xffffffff:08X})."
+                    return False
             try:
-                with urllib.request.urlopen(
+                with opener.open(
                         f"http://127.0.0.1:{self.cdp_port}/json/version",
-                        timeout=2):
+                        timeout=min(0.5, max(0.01, end - time.monotonic()))) as response:
+                    version = json.load(response)
+                    if not version.get("webSocketDebuggerUrl"):
+                        raise ValueError("Not a browser DevTools endpoint")
                     return True
             except Exception:                              # noqa: BLE001
-                time.sleep(0.2)
+                time.sleep(min(0.1, max(0, end - time.monotonic())))
+        self.startup_error = f"Browser startup timed out after {timeout:g} seconds."
         return False
 
     def alive(self) -> bool:

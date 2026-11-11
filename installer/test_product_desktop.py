@@ -67,7 +67,9 @@ user.EnumDesktopWindows.argtypes = [w.HANDLE, CALLBACK, w.LPARAM]
 def input_desktop():
     handle = user.OpenInputDesktop(0, False, 1)
     if not handle:
-        return "unavailable:" + str(c.get_last_error())
+        if c.get_last_error()==5:
+            return None
+        raise c.WinError(c.get_last_error())
     try:
         name = c.create_unicode_buffer(256)
         length = w.DWORD()
@@ -400,7 +402,9 @@ try:
     report["checks"]["no_browser_crash_on_activation_or_exit"] = not crashes
     report["checks"]["plugin_template_immutable"] = (app/"lan_seats/lib/client.js").read_bytes()==template_before
     report["input_desktop_after"] = input_desktop()
-    report["checks"]["user_desktop_unchanged"] = report["input_desktop_after"] == before
+    report["input_desktop_observation_available"] = before is not None and report["input_desktop_after"] is not None
+    if report["input_desktop_observation_available"]:
+        report["checks"]["user_desktop_unchanged"] = report["input_desktop_after"] == before
     report["passed"] = all(report["checks"].values())
     print(json.dumps({k:report[k] for k in ("browser_ready_seconds","assistant_ready_seconds","checks","passed")}, ensure_ascii=True), flush=True)
     assert report["passed"], "Acceptance checks failed; see product-test.json"

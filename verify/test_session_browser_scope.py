@@ -172,6 +172,27 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(self.calls.count(('activate', 'fb-020')), 2)
         self.assertEqual(self.calls.count(('step', 'fb-020')), 5)
 
+    def test_target_waits_do_not_repeat_activation(self):
+        self.grant(['fb-020'])
+        result=self.task(steps=[{'observe':{}},{'wait_for':{'selector':'#ready'}},
+                                {'wait_for':{'text':'Done'}},{'read':{}}])
+        self.assertTrue(result['ok'])
+        self.assertEqual(self.calls.count(('activate','fb-020')),1)
+
+    def test_target_wait_cannot_access_unselected_environment(self):
+        self.grant(['fb-020'])
+        result=self.task(env='fb-012',steps=[{'wait_for':{'selector':'#ready'}}])
+        self.assertTrue(result['scope_denied'])
+        self.assertEqual(self.calls,[])
+
+    def test_failed_target_wait_stops_click_without_retry(self):
+        self.grant(['fb-020'])
+        self.bridge.run_step=lambda *args:self.calls.append('run') or {
+            'ok':False,'action_sent':False,'error_code':'PAGE_CONDITION_TIMEOUT'}
+        result=self.task(steps=[{'wait_for':{'selector':'#ready'}},{'act':{'id':'e0'}}])
+        self.assertFalse(result['ok'])
+        self.assertEqual(self.calls.count('run'),1)
+
     def test_scope_can_be_revoked_while_a_step_is_in_flight(self):
         self.grant(['fb-020'])
         entered, release = threading.Event(), threading.Event()

@@ -3,14 +3,19 @@ const { spawn } = require('node:child_process')
 const { once } = require('node:events')
 const { pathToFileURL } = require('node:url')
 const path = require('node:path')
+const { mkdtempSync, writeFileSync, rmSync } = require('node:fs')
+const { tmpdir } = require('node:os')
 
 ;(async () => {
+  const configHome=mkdtempSync(path.join(tmpdir(),'bluebean-plugin-test-'))
   const server = spawn('python', ['verify/environment_agent_server.py'], { cwd: path.resolve(__dirname, '..'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
   let count = 0
   const realFetch = global.fetch
   try {
     const chunk = (await once(server.stdout, 'data'))[0].toString()
     const { port } = JSON.parse(chunk.trim())
+    writeFileSync(path.join(configHome,'.lan-bridge.json'),JSON.stringify({port,token:'isolated-agent-tests'}))
+    process.env.BLUEBEAN_DATA=configHome
     process.env.LAN_BRIDGE_URL = `http://127.0.0.1:${port}`
     process.env.LAN_BRIDGE_TOKEN = 'isolated-agent-tests'
     const { apply } = await import(pathToFileURL(path.resolve(__dirname, '../lan_plugin/index.js')))
@@ -24,10 +29,16 @@ const path = require('node:path')
     const agent = { session: { id: 'plugin-session' } }
     const exec = (id) => ({ agent, callId: id, signal: new AbortController().signal })
     const run = (name,args,id) => registry.get(name).execute(args,exec(id))
-    assert.equal(registry.size,23);count++
-    assert(prompt.text({agent}).includes('不能改用shell'));count++
+    assert.equal(registry.size,24);count++
+    assert(prompt.text({agent}).replace(/\s+/g,'').includes('不能改用shell'));count++
+    assert(prompt.text({agent}).includes('PAGE_CONDITION_TIMEOUT'))
+    assert(prompt.text({agent}).includes('wait_for'))
+    assert(registry.get('browser_task').description.includes('wait_for'));count++
+    assert(registry.get('browser_task').description.includes('opaque'))
+    assert(prompt.text({agent}).includes('不猜测e0'))
+    assert(prompt.text({agent}).includes('不要轮询整页'));count++
     const catalog = await run('environment_catalog',{},'catalog')
-    assert.equal(catalog.tools.length,21);assert.equal(catalog.ok,true);count++
+    assert.equal(catalog.ok,true,JSON.stringify(catalog));assert.equal(catalog.tools.length,22);count++
     const created = await run('environment_save',{display_name:'Plugin create'},'create')
     assert.equal(created.ok,true);assert.match(created.request_id,/^[a-f0-9]{64}$/);assert.equal(asks.length,0);count++
     const repeated = await run('environment_save',{display_name:'Plugin create'},'create')
@@ -102,5 +113,6 @@ const path = require('node:path')
     global.fetch=realFetch
     server.kill()
     await once(server,'exit').catch(()=>{})
+    rmSync(configHome,{recursive:true,force:true})
   }
-})().catch(()=>{console.error('DSH environment plugin integration failed; inspect assertions locally.');process.exitCode=1})
+})().catch(error=>{console.error(error.stack || String(error));process.exitCode=1})

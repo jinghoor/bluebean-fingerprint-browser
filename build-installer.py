@@ -290,6 +290,13 @@ def build() -> Path:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
 
+    # The product license refers to README.md; ship the public product text
+    # alongside it rather than the development workspace's historical README.
+    readme = ROOT / "opensource" / "README.md"
+    if not readme.is_file():
+        readme = ROOT / "README.md"
+    shutil.copy2(readme, app / "licenses" / "README.md")
+
     for name in ("THIRD_PARTY_NOTICES.md", "LICENSES/DEEPSEEK-HARNESS-MIT.txt",
                  "LICENSES/CHROMIUM-BSD-3-CLAUSE.txt"):
         source = ROOT / name

@@ -133,6 +133,15 @@ def automation_switches() -> list[str]:
     return [f"--lan-automation-port={port}",
             f"--lan-automation-token={token}"]
 
+def report_browser_failure(browser) -> None:
+    error = getattr(browser, "startup_error", "") or "Browser failed to start."
+    print(f"{error} Log: {browser.log_file}", flush=True)
+    atomic_json(DATA_ROOT / ".startup-browser.json", {
+        "ok": False, "error": error,
+        "exit_code": getattr(browser, "startup_exit_code", None),
+        "log": str(browser.log_file), "recorded_at": time.time()})
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--chrome", default=DEFAULT_CHROME)
@@ -172,7 +181,7 @@ def main() -> int:
                 cdp_port=(recorded_cdp_port(existing) or 9333) if existing else None,
                 extra_argv=[] if existing else startup_check_switches + ([] if args.no_automation else automation_switches()) + ["--lan-product-startup"])
             if not existing and not browser.start(timeout=30):
-                print("Browser failed to start; see the browser log.", flush=True)
+                report_browser_failure(browser)
                 return 2
             seconds = round(time.monotonic() - started, 3)
             atomic_json(DATA_ROOT / ".startup-browser.json", {
@@ -241,7 +250,7 @@ def main() -> int:
     print(f"starting {args.chrome}")
     print(f"  profile: {profile}")
     if not browser.start(timeout=60):
-        print("FAIL: the browser did not expose a debugging port in time")
+        report_browser_failure(browser)
         return 2
     print(f"  pid: {browser.chrome_pid}")
 

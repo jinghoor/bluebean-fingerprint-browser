@@ -8,7 +8,7 @@
   #error PermissionHelper must point to the native sandbox ACL helper.
 #endif
 #ifndef ProductVersion
-  #define ProductVersion "1.0.4"
+  #define ProductVersion "1.0.5"
 #endif
 
 [Setup]

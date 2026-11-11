@@ -115,6 +115,46 @@ def create_splash(tk, ttk):
         return None
 
 
+def startup_failure_message(started_epoch: float) -> str:
+    message = "蓝豆指纹浏览器未能启动。"
+    try:
+        import json
+        status = json.loads((PRODUCT_DATA / ".startup-browser.json").read_text(encoding="utf-8"))
+        if status.get("ok") is False and status.get("recorded_at", 0) >= started_epoch - 1:
+            code = status.get("exit_code")
+            if code is not None:
+                message += f"\n浏览器进程提前退出，退出码：{code}（0x{code & 0xffffffff:08X}）。"
+            else:
+                message += "\n" + status.get("error", "启动未完成。")
+            if status.get("log"):
+                message += "\n浏览器日志：" + status["log"]
+    except (OSError, ValueError, TypeError):
+        pass
+    return message + "\n启动日志：" + str(LOG)
+
+
+def show_startup_failure(started_epoch: float, root=None) -> None:
+    message = startup_failure_message(started_epoch)
+    print(message, flush=True)
+    try:
+        if root is not None:
+            from tkinter import messagebox
+            messagebox.showerror("蓝豆指纹浏览器 — 启动失败", message, parent=root)
+        elif sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, message, "蓝豆指纹浏览器 — 启动失败", 0x10)
+    except Exception as exc:
+        print(f"startup error notice unavailable: {exc}", flush=True)
+
+
+def run_without_splash() -> int:
+    started = time.time()
+    code = run_target()
+    if code:
+        show_startup_failure(started)
+    return code
+
+
 def main() -> int:
     LOG.parent.mkdir(parents=True, exist_ok=True)
     # Line buffered so the log is readable while the browser is still starting.
@@ -131,13 +171,13 @@ def main() -> int:
         import tkinter as tk
         from tkinter import ttk
     except ImportError:
-        return run_target()
+        return run_without_splash()
 
     print("startup notice: " + ("normal-startup" if FIRST_RUN_MARKER.is_file()
                                 else "first-run-runtime-preparation"), flush=True)
     root = create_splash(tk, ttk)
     if root is None:
-        return run_target()
+        return run_without_splash()
 
     result: dict[str, int] = {}
     started_at = time.monotonic()
@@ -150,6 +190,8 @@ def main() -> int:
 
     def finish_when_ready() -> None:
         if result.get("done") and time.monotonic() - started_at >= 0.8:
+            if result.get("code"):
+                show_startup_failure(started_epoch, root)
             if first_run and result.get("code") == 0 and not FIRST_RUN_MARKER.is_file():
                 failed = False
                 try:

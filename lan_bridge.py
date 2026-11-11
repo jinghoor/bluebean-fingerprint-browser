@@ -32,6 +32,11 @@ from bluebean_paths import APP_ROOT, DATA_ROOT, PROFILE_DIR
 from browser_backend import BrowserBackend                           # noqa: E402
 from dsh_sessions import SessionManager                              # noqa: E402
 from session_browser_scope import SessionBrowserScopes               # noqa: E402
+from bridge_runtime import source_revision
+
+# Capture once at import. Reading the disk on each health request would make an
+# old interpreter falsely claim it has loaded newly edited modules.
+LOADED_RUNTIME_REVISION = source_revision(Path(__file__).resolve().parent)
 
 LOG = logging.getLogger("lan_bridge")
 PROTOCOL_VERSION = "1"
@@ -220,7 +225,12 @@ class Bridge:
         started = time.perf_counter()
         if name == "observe":
             result = self.backend.observe(env, int(args.get("limit", 80)))
-            self.snapshots[env or ""] = self.backend.snapshot(env)
+            observation = self.backend.observations.get(result.get('env',env or ''))
+            summary = getattr(observation,'summary',None)
+            if isinstance(summary,dict):
+                self.snapshots[env or ''] = summary
+            else:
+                self.snapshots.pop(env or '',None)
         elif name == "act":
             result = self.backend.act(env, args["id"], args.get("action", "click"))
         elif name == "type":
@@ -247,6 +257,8 @@ class Bridge:
         elif name == "wait":
             time.sleep(float(args.get("ms", 200)) / 1000)
             result = {"waited_ms": args.get("ms", 200)}
+        elif name == 'wait_for':
+            result = self.backend.wait_for(env, **args)
         elif name == "env":
             result = {"note": "env switching happens through env_cli; use targets"}
         else:
@@ -255,7 +267,7 @@ class Bridge:
         changed = None
         snapshot_warning = None
         # Mutating steps answer "what happened" without a second round trip from the agent.
-        if name in ("act", "type", "goto"):
+        if name in ("act", "type", "goto") and result.get('ok') is not False:
             key = env or ""
             before = self.snapshots.get(key, {})
             try:
@@ -268,6 +280,7 @@ class Bridge:
                 self.snapshots.pop(key, None)
                 snapshot_warning = str(exc)[:200]
                 self.backend._drop_session(key)
+        elapsed = (time.perf_counter() - started) * 1000
         record = {"step": name, "env": env, "args": args, "ms": round(elapsed, 2),
                   "session_id": session_id,
                   "preset": preset,
@@ -313,7 +326,7 @@ class Bridge:
             return {"ok": False, "error": "no steps"}
         if not isinstance(steps, list) or any(not isinstance(step, dict) or len(step) != 1 for step in steps):
             return {"ok": False, "error": "steps must be an array of single-action objects"}
-        supported = {'observe', 'act', 'type', 'goto', 'clicks', 'batch', 'read', 'shot', 'wait', 'env'}
+        supported = {'observe', 'act', 'type', 'goto', 'clicks', 'batch', 'read', 'shot', 'wait', 'wait_for', 'env'}
         for step in steps:
             name, args = next(iter(step.items()))
             if name not in supported or (args is not None and not isinstance(args, dict)):
@@ -370,7 +383,7 @@ class Bridge:
                         # Read-only steps use an exact target and do not
                         # depend on which environment currently has focus.
                         # Mutations recheck focus; every step checks ownership.
-                        if not activated or next(iter(step)) not in {'read', 'observe', 'shot', 'wait'}:
+                        if not activated or next(iter(step)) not in {'read', 'observe', 'shot', 'wait', 'wait_for'}:
                             self.ensure_live(effective_env)
                             activated = True
                         dispatched = True
@@ -386,7 +399,10 @@ class Bridge:
                         return
                 except Exception as exc:                          # noqa: BLE001
                     failure = {"step": next(iter(step)), "error": str(exc)[:300]}
-                    if dispatched and next(iter(step)) in MUTATING_STEPS:
+                    if getattr(exc,'action_sent',None) is False:
+                        failure.update(action_sent=False,error_code=getattr(exc,'error_code','BROWSER_CONTROL_UNAVAILABLE'),
+                            next_action='restore_browser_connection; do not reopen environments or fall back to shell')
+                    elif dispatched and next(iter(step)) in MUTATING_STEPS:
                         failure.update(outcome_unknown=True,
                                        retry_hint='操作可能已经执行；先读取页面确认结果，不要自动重复操作。')
                     steps_out.append(failure)
@@ -737,6 +753,7 @@ def make_handler(bridge: Bridge, token: str):
                             "pid": os.getpid(), "data_root": str(DATA_ROOT.resolve()),
                             "app_root": str(APP_ROOT.resolve()),
                             "profile_root": str(PROFILE_DIR.resolve()),
+                            "runtime_revision": LOADED_RUNTIME_REVISION,
                             "env_management_api": 2,
                             "environment_status_api": 1,
                             "environment_activity_api": 2,
@@ -746,7 +763,7 @@ def make_handler(bridge: Bridge, token: str):
                             "environment_import_busy": getattr(getattr(getattr(bridge, 'env_management', None), 'imports', None), 'busy', lambda: False)(),
                             "browser_busy": getattr(bridge, 'execution_busy', lambda: False)(),
                             "chat_busy": bool(getattr(bridge.sessions, 'turn_started', None)),
-                            "features": ["observe", "act", "batch", "targets", "chat"],
+                            "features": ["observe", "act", "batch", "targets", "chat", "wait_for"],
                             "backend": "cdp", "preset": bridge.permissions.get("preset")})
             elif self.path in ('/v1/lan/manage/openapi', '/v1/lan/manage/catalog'):
                 from environment_api import openapi, catalogue

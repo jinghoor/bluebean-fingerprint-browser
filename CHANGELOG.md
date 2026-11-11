@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.5 - 2026-11-11
+
+- Improve Windows browser startup compatibility without disabling the renderer sandbox, and report early startup failures accurately.
+- Add explicit page readiness waits and actionable element checks without requiring every background resource to finish loading.
+- Reject stale observed element IDs before sending input and avoid replaying actions after uncertain outcomes.
+- Combine observation and baseline summaries in one renderer traversal and bypass system proxies for loopback control traffic.
+- Detect outdated bridge processes, replace confirmed idle owned instances, and preserve busy tasks and other installations.
+- Distinguish an unavailable browser control connection from a stopped environment and stop unnecessary reopen/shell fallback loops.
+- Bundle the product README next to its license notice and update Windows installer, launcher and assistant menu versions to 1.0.5.
+
 ## 1.0.4 - 2026-11-02
 
 - Include H.264/AAC playback support, with MP4, MSE/DASH and VP9/Opus playback regression checks.

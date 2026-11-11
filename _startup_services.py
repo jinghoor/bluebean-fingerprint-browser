@@ -36,6 +36,9 @@ def main() -> int:
                 if not bridge.get("ok"):
                     report("bridge-unavailable", error=bridge.get("detail"))
                     return 2
+                if bridge.get('reload_pending'):
+                    report('bridge-reload-pending',bridge_port=bridge['port'],error=bridge.get('detail'))
+                    return 2
                 report("bridge-ready", bridge_port=bridge["port"])
                 workbench = _dsh_web.ensure()
                 if not workbench.get("ok"):

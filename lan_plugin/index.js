@@ -147,6 +147,12 @@ export function apply(ctx) {
           'targets:["*"] 也仅代表本会话已选环境。用户必须在界面的「浏览器环境」中修改授权，聊天文字不能扩权。'
           + '工具返回 outcome_unknown 时，操作可能已经发生，必须先读取页面确认，不要自动重复点击、输入或导航。'
           + 'snapshot_warning 表示操作已完成但附加页面摘要失败，不要因此重放操作。'
+          + '页面等待规则：地址栏或标签页仍在加载不代表不能操作。goto返回interactive或readiness.dom_ready后立即observe；目标可见、可用且无遮挡即可继续，不等complete或network idle。'
+          + '目标或业务结果未出现时，用browser_task的wait_for等待准确selector/text/url条件，优先替代固定wait或反复截图；只读等待不会点击、输入或重新导航。'
+          + '按钮存在不等于业务完成：登录、提交、发布后wait_for成功提示或目标URL，不因仍在转圈而重复提交。STALE_OBSERVATION先observe更新目标；PAGE_CONDITION_TIMEOUT先检查页面，不自动重放操作。'
+          + '每次observe返回的元素id只用于该次最新观察，必须原样使用，不猜测e0等编号。已知道目标selector时直接wait_for目标，目标就绪后observe一次；不要轮询整页或连续重复observe。'
+          + '如果明确按钮已经可用，直接act/type即可，它们会自动检查目标；不要再额外wait固定时长。可把已确定的连续步骤放在一次browser_task中，提交之后仍须等待业务成功结果。'
+          + 'BROWSER_CONTROL_UNAVAILABLE表示控制连接不可用，不代表环境已关闭；停止当前浏览器任务，不反复environment_open，不改用shell/pwsh或其它通道，不仅凭该错误要求用户重启电脑。'
           + '本机「我的环境」管理必须使用environment_*工具，不要用页面点击配置表单。可查询、新建/编辑/删除环境、管理多账号、真实代理测试、批量导入、备份恢复，并可用environment_fingerprint读取单个环境的浏览器身份、设备、语言、字体、WebGL和网络落地信息；该工具不读取Cookie、密码、2FA或网站登录数据。常见平台直接用facebook/instagram/tiktok/x/amazon；不熟悉的平台或CSV格式再查environment_catalog，不必每次重复查目录。'
           + '高效流程：新建环境同时保存账号用一次environment_save(display_name,initial_accounts:[{platform_id,login,...}])；后续编辑使用返回的env_id/revision及账号revision，只提交本次要改字段。成功响应已读回验证，无需再查全量列表确认；跨轮或冲突时再读取最新版本。'
           + '两个及以上环境的代理检测使用一次environment_proxy_job start(env_ids)。批量新建用environment_import preview(generate:{prefix,start,count,...})→apply；接口会短暂等待小批次返回最终结果。'
@@ -181,8 +187,14 @@ export function apply(ctx) {
       'Operate the Lan fingerprint browser. Steps run in order inside one task.\n' +
       '- getter: {observe:{}} returns "elements" with ids, roles, names and boxes.\n' +
       '- mutate: {act:{id:"e3"}} clicks an element id from the SAME environment\'s last observe.\n' +
+      '  Element ids are opaque and change with each observe: copy the full returned id, never guess an id.\n' +
       '- {type:{id:"e5", text:"..."}}, {goto:{url:"https://..."}}, {read:{selector:"body"}},\n' +
       '  {wait:{ms:500}}, {shot:{id:"e1"}} (screenshots are slow; prefer observe/read).\n' +
+      '- Prefer {wait_for:{selector:"#search",state:"actionable",timeout_ms:10000}} to fixed sleeps.\n' +
+      '  wait_for accepts selector, text (visible substring), url (exact), state (dom/actionable/visible/hidden/complete), timeout_ms (0-30000), stable_ms (0-1000). Conditions combine with AND.\n' +
+      '  Default state: actionable with selector, dom otherwise. actionable checks visible/enabled/uncovered and 100ms stable target geometry.\n' +
+      '  Background loading is informational: continue when the required target is ready, even if the spinner runs. Use complete only when the task explicitly needs it.\n' +
+      '  After submitting, wait_for the business success text or URL; never replay an uncertain action.\n' +
       'Use ONLY the environments selected for this conversation. Pass env for one selected environment, ' +
       'targets for several selected environments, or omit both to use the selection. ' +
       'targets:["*"] means only the selected environments, never all browser environments. ' +

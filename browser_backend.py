@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import time
 import urllib.request
 import threading
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from _nowindow import no_window
+from page_readiness import readiness, wait_for as wait_for_page
 
 import sys
 
@@ -47,6 +49,13 @@ class BrowserCdp(Cdp):
 PROFILE = PROFILE_DIR
 STATE_FILE = PROFILE / "Default" / "envs.json"
 DEVTOOLS_PORT_FILE = PROFILE / "DevToolsActivePort"
+# Local control traffic must never inherit an Internet/system proxy.
+LOOPBACK_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+class BrowserControlUnavailable(RuntimeError):
+    error_code = 'BROWSER_CONTROL_UNAVAILABLE'
+    action_sent = False
 
 # Observation ids are only meaningful inside the observation that produced them, and
 # only for one environment: that is what stops "looked at A, clicked on B".
@@ -55,6 +64,8 @@ class Observation:
     env: str
     epoch: int
     items: list[dict] = field(default_factory=list)
+    document_token: str = ""
+    summary: dict | None = None
 
     def by_id(self, element_id: str) -> dict:
         for item in self.items:
@@ -120,7 +131,7 @@ class BrowserBackend:
             return cls._cached_port
         def responds(candidate: int) -> bool:
             try:
-                with urllib.request.urlopen(
+                with LOOPBACK_HTTP.open(
                         f"http://127.0.0.1:{candidate}/json/version", timeout=2) as reply:
                     return reply.status == 200
             except Exception:                                    # noqa: BLE001
@@ -148,9 +159,11 @@ class BrowserBackend:
             if from_process and responds(from_process):
                 port = from_process
         if port is None:
-            raise RuntimeError("browser is not running with remote debugging "
-                               f"(no {DEVTOOLS_PORT_FILE}, no --remote-debugging-port "
-                               f"on a chrome.exe using {PROFILE})")
+            raise BrowserControlUnavailable(
+                'Browser control endpoint could not be located for this profile. '
+                'The browser may still be running; do not infer that it is closed. '
+                'Pause browser actions and restore the product connection, rather than '
+                'repeatedly reopening environments or falling back to shell commands.')
         cls._cached_port = port
         return port
 
@@ -163,15 +176,14 @@ class BrowserBackend:
     def targets(self, retry: bool = True) -> list[dict]:
         url = f"http://127.0.0.1:{self.port()}/json/list"
         try:
-            with urllib.request.urlopen(url, timeout=8) as response:
+            with LOOPBACK_HTTP.open(url, timeout=8) as response:
                 return [t for t in json.loads(response.read().decode())
                         if t.get("type") == "page"]
         except Exception:                                          # noqa: BLE001
-            if not retry:
+            if not retry or self._explicit_port is not None:
                 raise
             # The browser was restarted: the cached port points at nothing now.
             type(self)._cached_port = None
-            self._explicit_port = None
             self.port(refresh=True)
             return self.targets(retry=False)
 
@@ -287,20 +299,27 @@ class BrowserBackend:
         if validated is not None and key in validated:
             return validated[key]
         cached = self._sessions.get(key)
+        target = None
         if cached is not None:
             target_id, cdp = cached
             try:
                 strict = getattr(self, "strict_resolution", False)
-                exact = (self.target_for_env(env)["id"] == target_id) if strict else any(
-                    page["id"] == target_id for page in self.targets())
+                if strict:
+                    target = self.target_for_env(env)
+                    exact = target['id'] == target_id
+                else:
+                    exact = any(page['id'] == target_id for page in self.targets())
                 if exact:
                     if validated is not None:
                         validated[key] = cdp
                     return cdp
             except Exception:                                    # noqa: BLE001
-                pass
+                # An ownership/discovery failure must not be repeated inside
+                # the same step or silently select another browser.
+                self._drop_session(key)
+                raise
             self._drop_session(key)
-        target = self.target_for_env(env)
+        target = target or self.target_for_env(env)
         cdp = BrowserCdp(target["webSocketDebuggerUrl"], open_timeout=8)
         self._sessions[key] = (target["id"], cdp)
         if validated is not None:
@@ -410,13 +429,18 @@ class BrowserBackend:
     def snapshot(self, env: str | None = None) -> dict:
         """Cheap page fingerprint used to tell the agent what changed after an action."""
         cdp = self._cdp(env)
-        raw = cdp.evaluate(self.SNAPSHOT_JS, timeout=15)
-        return json.loads(raw) if raw else {}
+        # Optional post-action evidence must not hold a completed action for 15s.
+        raw = cdp.evaluate(self.SNAPSHOT_JS, timeout=2)
+        data = json.loads(raw) if raw else {}
+        if data.get('ready'):
+            data['readiness'] = readiness(data['ready'])
+        return data
 
     @staticmethod
     def diff(before: dict, after: dict) -> dict:
         if not before:
-            return {"first": True, "url": after.get("url"), "count": after.get("count")}
+            return {"first": True, "url": after.get("url"), "count": after.get("count"),
+                    "readiness":after.get('readiness')}
         before_names = set(before.get("names") or [])
         after_names = set(after.get("names") or [])
         return {
@@ -426,15 +450,53 @@ class BrowserBackend:
             "appeared": sorted(after_names - before_names)[:8],
             "disappeared": sorted(before_names - after_names)[:8],
             "url": after.get("url"),
+            "readiness": after.get("readiness"),
         }
 
     # --------------------------------------------------------------- observations
     OBSERVE_JS = r"""
 (() => {
   const out = [];
-  const sel = 'a[href],button,input,select,textarea,[role=button],[role=link],[onclick]';
+  const idCounts = new Map(), siblingGroups = new WeakMap();
+  function locator(el) {
+    const path = [];
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      if (node.id && !idCounts.has(node.id))
+        idCounts.set(node.id,document.querySelectorAll('#'+CSS.escape(node.id)).length);
+      if (node.id && idCounts.get(node.id) === 1) {
+        path.unshift('#'+CSS.escape(node.id)); break;
+      }
+      const tag = node.tagName.toLowerCase();
+      const parent = node.parentElement;
+      if (parent && !siblingGroups.has(parent)) {
+        const groups = new Map();
+        for (const child of parent.children) {
+          if (!groups.has(child.tagName)) groups.set(child.tagName,[]);
+          groups.get(child.tagName).push(child);
+        }
+        siblingGroups.set(parent,groups);
+      }
+      const siblings = parent ? siblingGroups.get(parent).get(node.tagName) : [node];
+      path.unshift(tag+':nth-of-type('+(siblings.indexOf(node)+1)+')');
+    }
+    return path.join(' > ');
+  }
+  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link]';
+  const sel = summarySelector + ',[onclick]';
+  const names = [];
+  let count = 0, fingerprint = 0;
   let id = 0;
   for (const el of document.querySelectorAll(sel)) {
+    // Reuse text collected for the baseline instead of scanning the page twice.
+    const rawLabel = el.getAttribute('aria-label') || el.innerText || el.value || '';
+    const label = rawLabel.trim().replace(/\s+/g,' ');
+    if (el.matches(summarySelector)) {
+      const text = label.slice(0,40);
+      count++;
+      for (let i=0;i<text.length;i++) fingerprint=(fingerprint*31+text.charCodeAt(i))>>>0;
+      if (names.length<40) names.push(text);
+    }
+    if (out.length >= 120) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) continue;
     const cs = getComputedStyle(el);
@@ -443,8 +505,7 @@ class BrowserBackend:
     const cx = Math.min(innerWidth - 1, Math.max(0, r.left + r.width / 2));
     const cy = Math.min(innerHeight - 1, Math.max(0, r.top + r.height / 2));
     const hit = document.elementFromPoint(cx, cy);
-    const name = (el.getAttribute('aria-label') || el.innerText || el.value ||
-                  el.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    const name = (rawLabel || el.getAttribute('title') || '').trim().replace(/\s+/g,' ').slice(0,60);
     out.push({
       id: 'e' + (id++),
       tag: el.tagName.toLowerCase(),
@@ -455,30 +516,49 @@ class BrowserBackend:
       bbox: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
       clickable: cs.pointerEvents !== 'none',
       occluded: !(hit === el || el.contains(hit) || (hit && hit.contains(el))),
-      disabled: !!el.disabled,
+      disabled: el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'),
       visual_only: false,
+      selector: locator(el),
     });
-    if (out.length >= 120) break;
   }
   return JSON.stringify({url: location.href, title: document.title,
+                         ready: document.readyState, document_token: String(performance.timeOrigin),
                          viewport: [innerWidth, innerHeight],
-                         dpr: devicePixelRatio, elements: out});
+                         dpr: devicePixelRatio, elements: out,
+                         _snapshot: {url:location.href,title:document.title,count,fingerprint,names,ready:document.readyState}});
 })()
 """
 
     def observe(self, env: str | None, limit: int = 80) -> dict:
-        cdp = self._cdp(env)
-        raw = cdp.evaluate(self.OBSERVE_JS, timeout=20)
-        data = json.loads(raw) if raw else {"elements": []}
         resolved_env = env or self.env_state().get("active", "")
+        self.observations.pop(resolved_env,None)
+        cdp = self._cdp(env)
+        # One renderer round-trip produces both the observation and its baseline.
+        # The snapshot stays internal, rather than duplicating text in tool output.
+        raw = cdp.evaluate(self.OBSERVE_JS, timeout=20)
+        data = json.loads(raw) if raw else None
+        if not isinstance(data,dict) or not isinstance(data.get('elements'),list):
+            raise RuntimeError('page observation was not returned; observe again before acting')
         epoch = int(time.time() * 1000)
+        observation_id = secrets.token_hex(4)
+        items = data.get('elements', [])[:max(1,min(120,limit))]
+        for item in items:
+            item['id'] = observation_id + ':' + item['id']
+        summary = data.pop('_snapshot',None)
+        if isinstance(summary,dict) and summary.get('ready'):
+            summary['readiness'] = readiness(summary['ready'])
         observation = Observation(env=resolved_env, epoch=epoch,
-                                  items=data.get("elements", [])[:limit])
+                                  items=items, document_token=data.get('document_token',''),
+                                  summary=summary)
         self.observations[resolved_env] = observation
         data["elements"] = observation.items
         data["env"] = resolved_env
         data["epoch"] = epoch
+        data['readiness'] = readiness(data.get('ready','loading'))
         return data
+
+    def wait_for(self, env: str | None, **condition) -> dict:
+        return wait_for_page(self._cdp(env), condition)
 
     # ------------------------------------------------------------------- actions
 
@@ -680,6 +760,8 @@ class BrowserBackend:
                 ready = cdp.evaluate('document.readyState', timeout=2)
                 if (not expected_loader or frame.get('loaderId') == expected_loader) and ready in ('interactive', 'complete'):
                     return {'url': frame.get('url', url), 'ready': ready,
+                            'readiness':readiness(ready),
+                            'next_action':'observe; wait_for the required target only if it is not ready',
                             'waited_ms': round((time.monotonic() - started) * 1000, 2)}
             except RuntimeError as exc:
                 # During navigation an execution context can disappear. Polling
@@ -691,13 +773,29 @@ class BrowserBackend:
                 'detail': last_error, 'waited_ms': round((time.monotonic() - started) * 1000, 2)}
 
     def act(self, env: str | None, element_id: str, action: str = "click") -> dict:
+        if action not in ('click', 'hover', 'focus'):
+            raise ValueError(f"unsupported action {action!r}")
         resolved_env = env or self.env_state().get("active", "")
         observation = self.observations.get(resolved_env)
-        if observation is None:
-            raise RuntimeError(f"no observation for env {resolved_env!r}; call observe first")
-        item = observation.by_id(element_id)
+        try:
+            if observation is None:
+                raise KeyError(element_id)
+            item = observation.by_id(element_id)
+        except KeyError:
+            return {'ok':False,'action_sent':False,'error_code':'STALE_OBSERVATION',
+                    'error':'Element id is not from the latest observation; observe again.',
+                    'next_action':'observe'}
+        if item.get('selector') and observation.document_token:
+            check = self.wait_for(env, selector=item['selector'], document_token=observation.document_token,
+                identity={key:item.get(key,'') for key in ('tag','name','href')},
+                state='actionable', timeout_ms=2000)
+            if not check.get('ok'):
+                return check
+            item = {**item, 'bbox':check['state']['box'], 'point':check['state'].get('point')}
         x, y, w, h = item["bbox"]
         cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
+        if item.get('point'):
+            cx, cy = item['point']
         cdp = self._cdp(env)
         if action in ("click", "hover"):
             cdp.send("Input.dispatchMouseEvent", {
@@ -719,11 +817,25 @@ class BrowserBackend:
     def type_text(self, env: str | None, element_id: str, text: str) -> dict:
         resolved_env = env or self.env_state().get("active", "")
         observation = self.observations.get(resolved_env)
-        if observation is None:
-            raise RuntimeError(f"no observation for env {resolved_env!r}; call observe first")
-        item = observation.by_id(element_id)
+        try:
+            if observation is None:
+                raise KeyError(element_id)
+            item = observation.by_id(element_id)
+        except KeyError:
+            return {'ok':False,'action_sent':False,'error_code':'STALE_OBSERVATION',
+                    'error':'Element id is not from the latest observation; observe again.',
+                    'next_action':'observe'}
+        if item.get('selector') and observation.document_token:
+            check = self.wait_for(env, selector=item['selector'], document_token=observation.document_token,
+                identity={key:item.get(key,'') for key in ('tag','name','href')},
+                state='actionable', editable=True, timeout_ms=2000)
+            if not check.get('ok'):
+                return check
+            item = {**item, 'bbox':check['state']['box'], 'point':check['state'].get('point')}
         x, y, w, h = item["bbox"]
         cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
+        if item.get('point'):
+            cx, cy = item['point']
         cdp = self._cdp(env)
         cdp.send("Input.dispatchMouseEvent", {
             "type": "mousePressed", "x": cx, "y": cy,
