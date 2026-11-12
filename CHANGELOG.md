@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.6 - 2026-11-12
+
+- 网络代理使用 IP、端口、用户、密码四字段，支持粘贴自动拆分；凭据通过 Windows DPAPI 保存在本机。
+
+- Give the browser and DSH services a persistent product-private temporary directory instead of inheriting disposable installer paths.
+- Isolate embedded DSH Web, SDK and plugin initialization from another Desktop's Electron/Node carrier variables and bridge credentials.
+- Bind the embedded DSH Web service explicitly to loopback with an OS-assigned port.
+- Check the authenticated Agent preset API as well as the HTML shell before reporting DSH healthy.
+- Add disposable two-backend regressions for simultaneous API requests, prompt admission, WebSocket connectivity, authentication isolation and independent shutdown.
+- These local checks do not establish that every standalone DSH Desktop coexistence issue or online model workflow has been resolved.
+
 ## 1.0.5 - 2026-11-11
 
 - Improve Windows browser startup compatibility without disabling the renderer sandbox, and report early startup failures accurately.

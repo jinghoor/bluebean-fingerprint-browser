@@ -143,9 +143,9 @@ class EnvironmentAgentService:
                 if not a.get('fingerprint_seed'): a['fingerprint_seed']=secrets.token_hex(32)
                 if any(r.get('fingerprint_seed')==a['fingerprint_seed'] for r in rows.values()):
                     risk('shared_fingerprint','指定的指纹种子已被其它环境使用，可能削弱环境隔离。')
-                desired=validate_definition(a); envs.append(a['env_id']);checks[a['env_id']]=None
+                desired=validate_definition({**a,**({'proxy':self.manager.proxy_settings.normalize(a['proxy_fields'],a.get('proxy','direct'))['proxy']} if 'proxy_fields' in a else {})}); envs.append(a['env_id']);checks[a['env_id']]=None
             else:
-                row=known(a.get('env_id'));desired=validate_definition(a,row)
+                row=known(a.get('env_id'));desired=validate_definition({**a,**({'proxy':self.manager.proxy_settings.normalize(a['proxy_fields'],a.get('proxy',row.get('proxy','direct')))['proxy']} if 'proxy_fields' in a else {})},row)
                 if a.get('revision')!=revision(row): raise ManagementError('编辑前请读取最新revision',409,conflict=True)
                 if any(desired[k]!=definition(row)[k] for k in ('fingerprint_seed','locale','accept_languages')):
                     risk('browser_identity','修改指纹或语言身份可能影响网站登录和风控；网站数据保留，需重启后完整生效。')
@@ -154,7 +154,7 @@ class EnvironmentAgentService:
                 if desired['ip_mode'] == 'dynamic' and definition(row)['ip_mode'] != 'dynamic':
                     risk('dynamic_ip', '改为动态 IP 后将不再提示出口 IP 变化，请确认此环境确实使用动态代理。')
             if a.get('relink_preserved'): risk('relink','此编号可能保留旧账号和网站数据，将重新关联旧资料。')
-            a={**a,**desired}
+            a={**a,**desired,**({'proxy':a.get('proxy',rows.get(a['env_id'],{}).get('proxy','direct'))} if 'proxy_fields' in a else {})}
             if a.get('initial_accounts'):
                 if not create: raise ManagementError('initial_accounts仅用于新建；已有环境的账号请使用environment_accounts')
                 validated=[];identities=set()
@@ -219,7 +219,10 @@ class EnvironmentAgentService:
             warnings.append('批量修改只作用于明确列出的环境，返回逐项结果。')
         elif action=='proxy-test':
             if a.get('env_id'): a.setdefault('proxy',known(a['env_id']).get('proxy','direct'))
-            if 'proxy' not in a: raise ManagementError('请提供env_id或完整proxy地址')
+            if 'proxy_fields' in a:
+                a.setdefault('proxy','direct')
+                self.manager.proxy_settings.normalize(a['proxy_fields'],a['proxy'])
+            if 'proxy' not in a: raise ManagementError('请提供env_id或代理配置')
             read=True
         elif action=='proxy-job':
             verb=a.setdefault('action','status');read=verb=='status'

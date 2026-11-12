@@ -28,6 +28,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -36,7 +37,8 @@ sys.path.insert(0, str(HERE))
 from _nowindow import detached_no_window, hidden_startup_info, no_window  # noqa: E402
 from bluebean_paths import APP_ROOT, DATA_ROOT, DSH_BIN, DSH_EXE  # noqa: E402
 from bluebean_version import VERSION  # noqa: E402
-from _runtime_state import atomic_json, atomic_text, process_identity, startup_lock
+from _runtime_state import (DSH_ENVIRONMENT_VERSION, atomic_json, atomic_text,
+                           dsh_environment, process_identity, startup_lock)
 
 EXE = str(DSH_EXE)
 BIN = str(DSH_BIN)
@@ -67,7 +69,7 @@ def process_alive(pid: int) -> bool:
 
 
 def probe(url: str, timeout: float = 1.5) -> tuple[bool, str]:
-    """GET the workbench the way a browser does: token first, then the auth cookie it sets."""
+    """Check the authenticated shell and the same read-only API the mode selector uses."""
     if not url:
         return False, "no url"
     jar = http.cookiejar.CookieJar()
@@ -80,7 +82,21 @@ def probe(url: str, timeout: float = 1.5) -> tuple[bool, str]:
                 return False, f"HTTP {response.status}"
             if "<html" not in body.lower():
                 return False, "not an app shell"
-            return True, f"HTTP 200, cookies={len(list(jar))}"
+        origin = urllib.parse.urlsplit(url)
+        root = urllib.parse.urlunsplit((origin.scheme, origin.netloc, "", "", ""))
+        endpoint = "agentPresets/list"
+        rpc_id = "bluebean-health"
+        request = urllib.request.Request(root + "/api/" + endpoint,
+            data=json.dumps({"type": "client-request", "rpcId": rpc_id,
+                             "method": endpoint, "payload": {"args": {}}}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": root})
+        with opener.open(request, timeout=timeout) as response:
+            reply = json.loads(response.read(1024 * 1024))
+            result = reply.get("result")
+            if (reply.get("type") != "server-response" or reply.get("rpcId") != rpc_id or
+                    not isinstance(result, dict) or result.get("ok") is not True):
+                return False, "agent API unavailable"
+        return True, f"HTTP 200, agent API OK, cookies={len(list(jar))}"
     except urllib.error.HTTPError as exc:
         return False, f"HTTP {exc.code}"
     except Exception as exc:                                    # noqa: BLE001
@@ -147,9 +163,7 @@ def start(timeout: float = 120.0) -> dict:
     # deadline and breaks when the short-lived desktop launcher exits.
     offset = log.tell()
 
-    env = dict(os.environ)
-    env["ELECTRON_RUN_AS_NODE"] = "1"
-    env["DSH_HOME"] = str(HOME)
+    env = dsh_environment(DATA_ROOT, HOME)
     bridge_config = DATA_ROOT / ".lan-bridge.json"
     if bridge_config.exists():
         try:
@@ -163,7 +177,7 @@ def start(timeout: float = 120.0) -> dict:
         env["DEEPSEEK_API_KEY"] = key
 
     process = subprocess.Popen(
-        [EXE, BIN, "web", "--port", "0", "--no-open"],
+        [EXE, BIN, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"],
         env=env, cwd=str(HERE), stdout=log, stderr=log, stdin=subprocess.DEVNULL,
         creationflags=detached_no_window(), startupinfo=hidden_startup_info())
     log.close()
@@ -196,6 +210,7 @@ def start(timeout: float = 120.0) -> dict:
     state = {"url": url, "pid": process.pid, "port": int(url.split(":")[2].split("/")[0]),
              "home": str(HOME), "started_at": int(time.time()), "probe": detail,
              "app_root": str(APP_ROOT.resolve()),
+             "runtime_environment_version": DSH_ENVIRONMENT_VERSION,
              "process_started": process_identity(process.pid).get("started"),
              "plugin_signature": plugin_signature(), "bridge_signature": bridge_signature()}
     save_state(state)
@@ -217,9 +232,7 @@ def prepare_profile() -> None:
         marker.write_text(signature, encoding="utf-8")
         return
     target.parent.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
-    env["ELECTRON_RUN_AS_NODE"] = "1"
-    env["DSH_HOME"] = str(HOME)
+    env = dsh_environment(DATA_ROOT, HOME)
     # DSH's plugin manager invokes pnpm by name. Both the shim and Node must
     # come from the installation rather than a developer machine's PATH.
     private_tools = APP_ROOT / "tools"
@@ -267,7 +280,8 @@ def ensure() -> dict:
         url = str(state.get("url") or "")
         owned = owns_state(state)
         compatible = (state.get("plugin_signature") == plugin_signature() and
-                      state.get("bridge_signature") == bridge_signature())
+                      state.get("bridge_signature") == bridge_signature() and
+                      state.get("runtime_environment_version") == DSH_ENVIRONMENT_VERSION)
         if owned and compatible and url:
             ok, detail = probe(url)
             if ok:

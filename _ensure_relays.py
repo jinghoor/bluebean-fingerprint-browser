@@ -57,6 +57,11 @@ def dead_envs(profile: pathlib.Path = PROFILE.parent) -> list[str]:
 
 def ensure_relays(verbose: bool = True, profile: pathlib.Path = PROFILE.parent) -> dict:
     """Start relays for environments whose local proxy port stopped listening."""
+    from environment_proxy import ProxySettings
+    state_file = profile / 'Default' / 'envs.json'
+    if state_file.exists():
+        entries = json.loads(state_file.read_text(encoding='utf-8')).get('envs', [])
+        ProxySettings(profile / 'Default').restore(row.get('proxy', '') for row in entries)
     dead = dead_envs(profile)
     if not dead:
         if verbose:

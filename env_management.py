@@ -142,6 +142,8 @@ class EnvironmentManagement(WorkspaceServices):
     def __init__(self, bridge, command=None, probe=None, background_live=True):
         self.bridge = bridge
         self.profile = Path(bridge.account_vault.path).parent
+        from environment_proxy import ProxySettings
+        self.proxy_settings = ProxySettings(self.profile)
         self.path = self.profile / 'env-management.json'
         self.backup_dir = self.profile / 'env-config-backups'
         self.lock = threading.RLock()
@@ -300,6 +302,8 @@ class EnvironmentManagement(WorkspaceServices):
         self._write_meta(meta)
 
     def _send(self, command):
+        if command.get('command') == 'create' and command.get('proxy'):
+            self.proxy_settings.restore([command['proxy']])
         if self._command:
             return self._command(command)
         try:
@@ -343,6 +347,7 @@ class EnvironmentManagement(WorkspaceServices):
                 accounts = {}
                 account_warning = '本机账号库暂时不可读；环境配置仍可使用，账号操作请稍后重试'
             rows = []
+            proxy_entries = self.proxy_settings.read()
             for entry in disk['envs']:
                 if entry['env_id'] in internal: continue
                 row = {**live_rows.get(entry['env_id'], {}), **definition(entry)}
@@ -354,6 +359,7 @@ class EnvironmentManagement(WorkspaceServices):
                 row['restart_pending'] = bool(row.get('restart_pending_pid') and
                                               row['restart_pending_pid'] == self._browser_pid())
                 row['revision'] = revision(entry)
+                row['proxy_fields'] = self.proxy_settings.fields(row['proxy'], proxy_entries)
                 test = row.get('proxy_test')
                 if test and (time.time()-test.get('at',0)>900 or test.get('proxy') != row['proxy'] or
                              ip_key(test.get('expected_exit_ip', '')) != ip_key(row['expected_exit_ip'])):
@@ -375,7 +381,7 @@ class EnvironmentManagement(WorkspaceServices):
                     'active': active, 'envs': rows,
                     'warning': warning, 'account_warning': account_warning, 'live_status': live_status,
                     'workspace_version':3,'platforms': __import__('environment_accounts').catalog(),
-                    'capabilities': {'proxy_test': ['http', 'https','socks4','socks5'], 'proxy_auth': False,
+                    'capabilities': {'proxy_test': ['http', 'https','socks4','socks5'], 'proxy_auth': True,
                                      'account_encryption': 'Windows DPAPI', 'cloud_sync': False}}
 
     def save(self, payload):
@@ -383,6 +389,9 @@ class EnvironmentManagement(WorkspaceServices):
             self._meta()  # Reject unknown metadata versions before native writes.
             state = self._state()
             current = next((e for e in state['envs'] if e['env_id'] == payload.get('env_id')), None)
+            settings = self.proxy_settings.normalize(payload['proxy_fields'], payload.get('proxy', 'direct')) if 'proxy_fields' in payload else None
+            if settings is not None:
+                payload = {**payload, 'proxy': settings['proxy']}
             row = validate_definition(payload, current)
             if payload.get('create_only') and current:
                 raise ManagementError('环境编号已存在', 409, {'env_id': '请换一个环境编号'})
@@ -401,6 +410,9 @@ class EnvironmentManagement(WorkspaceServices):
                 raise ManagementError('已有同名环境，可修改名称或明确允许同名', 409,
                                       {'display_name': '环境名称重复'}, duplicate_name=True)
             persisted = current
+            if settings is not None:
+                row['proxy'] = self.proxy_settings.prepare(settings)
+                changed = [key for key in FIELDS if row[key] != definition(current or {}).get(key)]
             if changed:
                 try:
                     reply = self._send({'command': 'create', **row})
@@ -447,6 +459,8 @@ class EnvironmentManagement(WorkspaceServices):
                     except OSError:
                         result['warning'] = ('配置与账号已保存，但维护记录写入失败；请检查本机磁盘空间与权限' if changed else
                                              '账号已保存，但维护记录写入失败；请检查本机磁盘空间与权限')
+            result['proxy'] = row['proxy']
+            result['proxy_fields'] = self.proxy_settings.fields(row['proxy'])
             return result
 
     @staticmethod
@@ -765,6 +779,8 @@ class EnvironmentManagement(WorkspaceServices):
     def test_proxy(self, payload):
         from lan_bridge import validate_proxy_config
         proxy = validate_proxy_config(str(payload.get('proxy', '')).strip())
+        if 'proxy_fields' in payload:
+            proxy = self.proxy_settings.prepare(self.proxy_settings.normalize(payload['proxy_fields'], proxy))
         expected = str(payload.get('expected_exit_ip', '')).strip()
         ip_mode = str(payload.get('ip_mode', 'static'))
         if payload.get('env_id') and 'expected_exit_ip' not in payload:

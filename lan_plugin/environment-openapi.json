@@ -157,6 +157,40 @@
             ],
             "description": "静态 IP 在首次启动时核对已保存出口；动态 IP 不因出口变化提示风险"
           },
+          "proxy_fields": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "IP或主机名；新节点默认HTTP，已有节点保留原协议"
+              },
+              "port": {
+                "type": "string",
+                "description": "1–65535"
+              },
+              "username": {
+                "type": "string",
+                "description": "代理用户；无需认证时留空"
+              },
+              "password": {
+                "type": "string",
+                "description": "代理密码；不要在回答中复述"
+              },
+              "password_action": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "replace",
+                  "clear"
+                ]
+              }
+            },
+            "required": [
+              "host",
+              "port"
+            ],
+            "additionalProperties": false
+          },
           "create_only": {
             "type": "boolean"
           },
@@ -376,6 +410,40 @@
           "proxy": {
             "type": "string",
             "description": "http(s)/socks4/socks5://主机:端口，或direct/system；当前不支持认证代理"
+          },
+          "proxy_fields": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "IP或主机名；新节点默认HTTP，已有节点保留原协议"
+              },
+              "port": {
+                "type": "string",
+                "description": "1–65535"
+              },
+              "username": {
+                "type": "string",
+                "description": "代理用户；无需认证时留空"
+              },
+              "password": {
+                "type": "string",
+                "description": "代理密码；不要在回答中复述"
+              },
+              "password_action": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "replace",
+                  "clear"
+                ]
+              }
+            },
+            "required": [
+              "host",
+              "port"
+            ],
+            "additionalProperties": false
           },
           "expected_exit_ip": {
             "type": "string",
@@ -1072,6 +1140,40 @@
             ],
             "description": "静态 IP 在首次启动时核对已保存出口；动态 IP 不因出口变化提示风险"
           },
+          "proxy_fields": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "IP或主机名；新节点默认HTTP，已有节点保留原协议"
+              },
+              "port": {
+                "type": "string",
+                "description": "1–65535"
+              },
+              "username": {
+                "type": "string",
+                "description": "代理用户；无需认证时留空"
+              },
+              "password": {
+                "type": "string",
+                "description": "代理密码；不要在回答中复述"
+              },
+              "password_action": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "replace",
+                  "clear"
+                ]
+              }
+            },
+            "required": [
+              "host",
+              "port"
+            ],
+            "additionalProperties": false
+          },
           "create_only": {
             "type": "boolean"
           },
@@ -1306,6 +1408,40 @@
           "proxy": {
             "type": "string",
             "description": "http(s)/socks4/socks5://主机:端口，或direct/system；当前不支持认证代理"
+          },
+          "proxy_fields": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "IP或主机名；新节点默认HTTP，已有节点保留原协议"
+              },
+              "port": {
+                "type": "string",
+                "description": "1–65535"
+              },
+              "username": {
+                "type": "string",
+                "description": "代理用户；无需认证时留空"
+              },
+              "password": {
+                "type": "string",
+                "description": "代理密码；不要在回答中复述"
+              },
+              "password_action": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "replace",
+                  "clear"
+                ]
+              }
+            },
+            "required": [
+              "host",
+              "port"
+            ],
+            "additionalProperties": false
           },
           "expected_exit_ip": {
             "type": "string",

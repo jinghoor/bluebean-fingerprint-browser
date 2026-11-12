@@ -31,6 +31,7 @@ import subprocess
 
 from _nowindow import hidden_startup_info, no_window
 from bluebean_paths import DATA_ROOT, DSH_BIN, DSH_EXE
+from _runtime_state import dsh_environment
 import sys
 import threading
 import time
@@ -59,9 +60,7 @@ class DshRuntime:
         self.home = home
         self.log = log
         home.mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ)
-        env["ELECTRON_RUN_AS_NODE"] = "1"
-        env["DSH_HOME"] = str(home)
+        env = dsh_environment(DATA_ROOT, home)
         # dsh-base reads the permission mode from this variable and defaults to workspace-write,
         # which on Windows runs tools under an ACL restricted token - powershell then fails to
         # initialise (0xC0000142) after flashing a console window. The operator's own GUI session

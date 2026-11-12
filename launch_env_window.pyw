@@ -164,6 +164,18 @@ def main() -> int:
     print(f"\n=== {datetime.datetime.now():%Y-%m-%d %H:%M:%S} shortcut launch "
           f"(args={sys.argv[1:]})", flush=True)
 
+    # Setup may delete its TEMP after launching us. Establish a persistent
+    # product temp directory before Tk, Chromium or any helper is started.
+    try:
+        from _runtime_state import runtime_environment
+        os.environ.update(runtime_environment(PRODUCT_DATA))
+        import tempfile
+        tempfile.tempdir = os.environ["TEMP"]
+    except OSError:
+        traceback.print_exc()
+        show_startup_failure(time.time())
+        return 1
+
     # The shortcut uses pythonw, so this small Tk window gives the operator
     # feedback while quiet proxy/assistant/browser initialization runs. The
     # worker keeps Tk responsive and reports completion back to the UI thread.

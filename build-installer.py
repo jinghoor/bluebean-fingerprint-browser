@@ -35,7 +35,7 @@ ENTRY_MODULES = {
     "session_browser_scope.py", "dsh_client.py", "local_account_vault.py",
     "environment_agent.py", "environment_api.py", "environment_accounts.py",
     "environment_import.py", "environment_status.py",
-    "environment_workspace.py", "env_management.py", "fp_identity.py",
+    "environment_workspace.py", "environment_proxy.py", "env_management.py", "fp_identity.py",
 }
 
 # Include delayed imports as well as startup imports. These support SOCKS proxy
@@ -159,7 +159,8 @@ def build_windows_installer(release: Path) -> Path:
     resource = build_dir / "launcher.res"
     launcher = release / "App" / "BlueBean.exe"
     installer = release / "BlueBean-Setup-Windows-x64.exe"
-    inno_output = build_dir / "inno-payload"
+    # Keep each build isolated from previously opened installer executables.
+    inno_output = release / "inno-payload"
     inno_output.mkdir(exist_ok=True)
     installer_payload = inno_output / installer.name
 

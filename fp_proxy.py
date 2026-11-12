@@ -238,8 +238,9 @@ class Relay:
     flags, so callers do not need to special-case anything.
     """
 
-    def __init__(self, spec: ProxySpec):
+    def __init__(self, spec: ProxySpec, *, listen_port: int = 0):
         self.spec = spec
+        self._listen_port = listen_port
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server = None
@@ -306,7 +307,7 @@ class Relay:
             self._thread.join(timeout=5)
 
     async def _serve(self):
-        return await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        return await asyncio.start_server(self._handle, "127.0.0.1", self._listen_port)
 
     def chrome_flags(self) -> list[str]:
         if not self.spec.needs_relay:
@@ -487,7 +488,10 @@ class Relay:
             headers.append(line)
 
         parts = request_line.split()
-        if len(parts) < 2 or parts[0] != b"CONNECT":
+        if len(parts) >= 3 and parts[0] != b"CONNECT":
+            await self._http_forward(request_line, headers, reader, writer)
+            return
+        if len(parts) < 3:
             writer.write(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")
             await writer.drain()
             return
@@ -512,6 +516,32 @@ class Relay:
         try:
             writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             await writer.drain()
+            await self._tunnel(reader, writer, up_r, up_w)
+        finally:
+            await self._close_writer(up_w)
+
+    async def _http_forward(self, request_line, headers, reader, writer):
+        """Forward ordinary HTTP pages through the same authenticated upstream."""
+        from urllib.parse import urlsplit
+        try:
+            target = urlsplit(request_line.split()[1].decode('ascii'))
+            if target.scheme != 'http' or not target.hostname or target.username or target.password:
+                raise ValueError('absolute HTTP target required')
+            spec = self.spec
+            context = ssl.create_default_context() if spec.mode == 'https' else None
+            up_r, up_w = await asyncio.wait_for(asyncio.open_connection(spec.host, spec.port, ssl=context), timeout=20)
+        except Exception:
+            writer.write(b'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+            await writer.drain()
+            return
+        try:
+            outgoing = [request_line.rstrip(b'\r\n')]
+            outgoing.extend(line.rstrip(b'\r\n') for line in headers if line.split(b':', 1)[0].strip().lower()
+                            not in (b'proxy-authorization', b'proxy-connection', b'connection'))
+            token = base64.b64encode(f'{spec.username}:{spec.password}'.encode())
+            outgoing.extend([b'Proxy-Authorization: Basic ' + token, b'Connection: close', b'', b''])
+            up_w.write(b'\r\n'.join(outgoing))
+            await up_w.drain()
             await self._tunnel(reader, writer, up_r, up_w)
         finally:
             await self._close_writer(up_w)

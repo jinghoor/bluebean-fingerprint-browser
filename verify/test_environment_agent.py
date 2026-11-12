@@ -61,7 +61,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(len(TOOLS),22)
         self.assertEqual(len(openapi()['components']['schemas']),22)
         self.assertIn('accounts',catalogue()['import_examples'])
-        self.assertFalse(catalogue()['proxy_auth'])
+        self.assertTrue(catalogue()['proxy_auth'])
     def test_query_pagination_get_and_no_secrets(self):
         self.account()
         page=self.run_tool('environment_list',{'limit':1,'include_accounts':False})['result']

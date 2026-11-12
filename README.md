@@ -4,13 +4,13 @@
 
 ## 安装
 
-1. 从 Releases 下载 `BlueBean-Setup-1.0.5-Windows-x64.exe`。
+1. 从 Releases 下载 `BlueBean-Setup-1.0.6-Windows-x64.exe`。
 2. 运行安装程序并按向导完成安装。
 3. 从桌面快捷方式、开始菜单或安装目录中的 `BlueBean.exe` 启动。
 
 安装包为 Windows 10 2004（19041）及以上的 x64 版本。浏览器、DSH、Python 和 Node 运行时均随安装包附带。模型服务、代理和网站账号仍需使用者自行配置。
 
-当前版本为 **1.0.5**，包含启动兼容、Agent 页面等待及桥接连接稳定性更新。检查结果见 [1.0.5 发布测试说明](docs/RELEASE-1.0.5-TESTS.md)。卸载会保留用户数据。
+当前版本为 **1.0.6**，新增 DSH 运行环境隔离、稳定临时目录与 Agent 接口健康检测。检查范围见 [1.0.6 发布测试说明](docs/RELEASE-1.0.6-TESTS.md)。卸载会保留用户数据。
 
 ## 从源码构建
 

@@ -10,6 +10,45 @@ import tempfile
 import time
 
 
+def runtime_environment(data_root: Path, parent: dict | None = None) -> dict:
+    """Give product children a stable temp root, independent of the installer.
+
+    Setup's post-install launch inherits TEMP/TMP pointing at a disposable
+    BlueBeanSetup-* directory. Setup removes it while the browser and DSH keep
+    running, so Node's lazy spill/file services can subsequently fail ENOENT.
+    Change only the child environment, never Windows' user/system settings.
+    """
+    environment = dict(os.environ if parent is None else parent)
+    temporary = (Path(data_root) / "Temp").resolve()
+    temporary.mkdir(parents=True, exist_ok=True)
+    for name in ("TEMP", "TMP", "TMPDIR"):
+        environment[name] = str(temporary)
+    return environment
+
+
+DSH_ENVIRONMENT_VERSION = 2
+
+
+def dsh_environment(data_root: Path, home: Path, parent: dict | None = None) -> dict:
+    """Start an embedded Harness without inheriting another Desktop's carrier.
+
+    Keep intentional provider/proxy/permission settings. Desktop IPC facts,
+    Electron switches and Node injection hooks belong to the launching process,
+    not to this private CLI service. Bridge credentials are supplied separately
+    from this product home's state file.
+    """
+    environment = runtime_environment(data_root, parent)
+    for key in list(environment):
+        name = key.upper()
+        if (name.startswith(("DSH_DESKTOP_", "ELECTRON_")) or
+                name in {"NODE_OPTIONS", "NODE_PATH", "DSH_WEB_URL",
+                         "LAN_BRIDGE_URL", "LAN_BRIDGE_TOKEN", "DSH_HOME"}):
+            environment.pop(key)
+    environment["DSH_HOME"] = str(Path(home).resolve())
+    environment["ELECTRON_RUN_AS_NODE"] = "1"
+    return environment
+
+
 def atomic_json(path: Path, value: dict) -> None:
     atomic_text(path, json.dumps(value, ensure_ascii=False, indent=2))
 
