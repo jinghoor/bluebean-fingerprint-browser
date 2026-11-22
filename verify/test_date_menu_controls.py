@@ -19,13 +19,16 @@ PROFILE = OUT / "Profile"
 PROFILE.mkdir(parents=True)
 PAGE = '''<!doctype html><input id="date" type="date"><input id="time" type="time">
 <input id="datetime" type="datetime-local"><button id="category" aria-haspopup="menu">类别</button>
-<div id="menus"></div><pre id="result"></pre><script>
+<div id="custom" class="select-content-wrap" style="cursor:pointer"><div class="select-content-box">请选择</div><div class="wj-select ws-select" style="opacity:0"></div></div>
+<div id="customMenu" style="display:none"></div><div id="menus"></div><pre id="result"></pre><pre id="customResult"></pre><script>
 const levels=[['Electronics'],['Computers'],['Laptops'],['Gaming']];
 function show(level){const box=document.createElement('div');box.id='menu-'+level;box.setAttribute('role','menu');
   const item=document.createElement('button');item.setAttribute('role','menuitem');item.textContent=levels[level][0];item.dataset.level=level;box.append(item);menus.append(box);}
 category.onclick=()=>{menus.textContent='';show(0)};
 menus.onclick=e=>{const item=e.target.closest('[role=menuitem]');if(!item)return;const level=Number(item.dataset.level);
   if(level+1<levels.length)show(level+1);else result.textContent='selected:'+item.textContent;};
+custom.onclick=()=>{customMenu.innerHTML='<div class="option-item">自定义选项</div><div class="option-item">第二选项</div>';customMenu.style.display='block'};
+customMenu.onclick=e=>{const item=e.target.closest('.option-item');if(item)customResult.textContent='custom:'+item.textContent;};
 </script>'''.encode()
 
 
@@ -82,6 +85,8 @@ try:
     assert controls["#date"]["input_type"] == "date"
     assert controls["#time"]["input_type"] == "time"
     assert controls["#datetime"]["input_type"] == "datetime-local"
+    assert controls["#custom"]["control_kind"] == "custom-dropdown"
+    assert controls["#custom"]["role"] == "combobox"
     report["checks"].append("observe_identifies_date_time_input_types")
 
     date = backend.set_date_time(env_id, controls["#date"]["id"], "2026-12-25")
@@ -95,11 +100,15 @@ try:
     menu = backend.menu_select(env_id, controls["#category"]["id"],
                                ["Electronics", "Computers", "Laptops", "Gaming"])
     assert menu["ok"] and menu["path"] == ["Electronics", "Computers", "Laptops", "Gaming"]
+    custom_menu = backend.menu_select(env_id, controls["#custom"]["id"], ["自定义选项"])
+    assert custom_menu["ok"] and custom_menu["path"] == ["自定义选项"]
     state = json.loads(backend._cdp(env_id).evaluate(
-        "JSON.stringify({date:date.value,time:time.value,datetime:datetime.value,result:result.textContent})"))
+        "JSON.stringify({date:date.value,time:time.value,datetime:datetime.value,result:result.textContent,custom:customResult.textContent})"))
     assert state == {"date": "2026-12-25", "time": "14:30",
-                     "datetime": "2026-12-25T14:30", "result": "selected:Gaming"}
+                     "datetime": "2026-12-25T14:30", "result": "selected:Gaming",
+                     "custom": "custom:自定义选项"}
     report["checks"].append("four_level_menu_relocates_after_each_click")
+    report["checks"].append("custom_div_dropdown_observed_and_selected")
     report["passed"] = True
 finally:
     report_path = OUT / "report.json"

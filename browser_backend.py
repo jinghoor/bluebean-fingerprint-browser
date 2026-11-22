@@ -475,8 +475,34 @@ class BrowserBackend:
 (() => {
   const out = [], names = [], idCounts = new Map(), siblingGroups = new WeakMap();
   const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup],[draggable=true],[ondrop],[ondragover]';
-  const sel = summarySelector + ',[onclick]';
+  const customCandidateSelector = '[class*="select"],[class*="dropdown"],[class*="cascader"],[class*="combobox"],[class*="picker"],[data-menu-item],[data-option]';
+  const sel = summarySelector + ',' + customCandidateSelector + ',[onclick]';
   let count = 0, fingerprint = 0, id = 0;
+  function isCustomControl(el) {
+    if (!el || el.nodeType !== 1 || el.matches('option,li,[role=option],[role=menuitem]')) return false;
+    const cls = typeof el.className === 'string' ? el.className : '';
+    if (!/(^|[-_\s])(select|dropdown|cascader|combobox|picker)([-_\s]|$)/i.test(cls)) return false;
+    const explicitRoot = /(^|[-_\s])(wj-select|ws-select|dropdown-trigger|dropdown-toggle|cascader-trigger|combobox-input|picker-trigger)([-_\s]|$)/i.test(cls);
+    if (!explicitRoot) {
+      const preferred = el.querySelector('.wj-select,.ws-select');
+      if (preferred) {
+        const preferredStyle = getComputedStyle(preferred);
+        const preferredBox = preferred.getBoundingClientRect();
+        if (preferredStyle.display !== 'none' && preferredStyle.visibility !== 'hidden' &&
+            Number(preferredStyle.opacity) > 0 && preferredBox.width >= 4 && preferredBox.height >= 4) return false;
+      }
+      let parent = el.parentElement;
+      while (parent) {
+        const parentClass = typeof parent.className === 'string' ? parent.className : '';
+        if (/(^|[-_\s])(select|dropdown|cascader|combobox|picker)([-_\s]|$)/i.test(parentClass) &&
+            (getComputedStyle(parent).cursor === 'pointer' || parent.querySelector('.wj-select,.ws-select'))) return false;
+        parent = parent.parentElement;
+      }
+    }
+    const style = getComputedStyle(el);
+    return style.cursor === 'pointer' || el.tabIndex >= 0 || el.hasAttribute('onclick') ||
+      el.matches('[aria-haspopup],[role=combobox],[role=listbox]');
+  }
   function locator(el, root) {
     if (el.id) {
       try { if (root.querySelectorAll('#' + CSS.escape(el.id)).length === 1) return '#' + CSS.escape(el.id); } catch (_) {}
@@ -506,7 +532,8 @@ class BrowserBackend:
         el.getAttribute('placeholder') || el.innerText ||
         (el.matches('input,textarea') ? '' : el.value) || '';
       const label = rawLabel.trim().replace(/\s+/g, ' ');
-      if (el.matches(summarySelector)) {
+      const customControl = isCustomControl(el);
+      if (el.matches(summarySelector) || customControl) {
         const text = label.slice(0, 40);
         count++;
         for (let i = 0; i < text.length; i++) fingerprint = (fingerprint * 31 + text.charCodeAt(i)) >>> 0;
@@ -531,8 +558,8 @@ class BrowserBackend:
         options: Array.from(el.options).slice(0, 120).map(option => ({value: option.value, label: (option.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120), selected: option.selected, disabled: option.disabled}))
       } : {};
       const inputState = el.matches('input[type=checkbox],input[type=radio]') ? {checked: el.checked, value: el.value || ''} : {};
-      const menuState = {input_type: el.getAttribute('type'), aria_haspopup: el.getAttribute('aria-haspopup'), aria_expanded: el.getAttribute('aria-expanded'), aria_selected: el.getAttribute('aria-selected'), aria_current: el.getAttribute('aria-current'), aria_level: el.getAttribute('aria-level'), menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null};
-      out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport: clipped.right > clipped.left && clipped.bottom > clipped.top, clickable:cs.pointerEvents !== 'none', occluded: root === document ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...menuState});
+      const menuState = {input_type: el.getAttribute('type'), aria_haspopup: el.getAttribute('aria-haspopup'), aria_expanded: el.getAttribute('aria-expanded'), aria_selected: el.getAttribute('aria-selected'), aria_current: el.getAttribute('aria-current'), aria_level: el.getAttribute('aria-level'), menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null, custom_control:customControl, control_kind:customControl ? 'custom-dropdown' : null};
+      out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (customControl ? 'combobox' : el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport: clipped.right > clipped.left && clipped.bottom > clipped.top, clickable:cs.pointerEvents !== 'none', occluded: root === document ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...menuState});
     }
     if (out.length >= 120) return;
     let frames = [];
@@ -1690,7 +1717,9 @@ class BrowserBackend:
         if observation.document_token:
             check = self.wait_for(env, selector=trigger['selector'],
                                   document_token=observation.document_token,
-                                  state='actionable', timeout_ms=2000)
+                                  state='actionable', timeout_ms=2000,
+                                  frame_path=trigger.get('frame_path', []),
+                                  shadow_path=trigger.get('shadow_path', []))
             if not check.get('ok'):
                 return check
         x, y, w, h = trigger['bbox']
@@ -1698,6 +1727,8 @@ class BrowserBackend:
         if trigger.get('point'):
             cx, cy = trigger['point']
         self.cursor_event(env, cx, cy, 'menu')
+        cdp.send('Input.dispatchMouseEvent', {
+            'type': 'mouseMoved', 'x': cx, 'y': cy, 'button': 'none'})
         for event_type in ('mousePressed', 'mouseReleased'):
             cdp.send('Input.dispatchMouseEvent', {
                 'type': event_type, 'x': cx, 'y': cy,
@@ -1710,7 +1741,7 @@ class BrowserBackend:
             " r.top < innerHeight && r.left < innerWidth && s.visibility !== 'hidden' &&"
             " s.display !== 'none' && s.pointerEvents !== 'none'; };"
             " const nodes = [...document.querySelectorAll('[role=menuitem],[role=option],[role=treeitem],"
-            "[data-menu-item],li,[role=gridcell],button,a')].filter(visible);"
+            "[data-menu-item],[data-option],[class*=" + json.dumps('cascader-node') + "],[class*=" + json.dumps('menu-item') + "],[class*=" + json.dumps('option') + "],li,[role=gridcell],button,a')].filter(visible);"
             " const exact = nodes.filter(el => (el.innerText || el.textContent || '').trim()"
             ".replace(/\\s+/g, ' ').toLocaleLowerCase() === wanted);"
             " const el = exact[exact.length - 1]; if (!el) return null; const r = el.getBoundingClientRect();"
@@ -1734,6 +1765,11 @@ class BrowserBackend:
                         'path': chosen + [label],
                         'next_action': 'observe'}
             self.cursor_event(env, state['x'], state['y'], 'menu')
+            cdp.send('Input.dispatchMouseEvent', {
+                'type': 'mouseMoved', 'x': state['x'], 'y': state['y'], 'button': 'none'})
+            # Give custom popup components one renderer task to promote the
+            # hovered item before the trusted press/release pair.
+            time.sleep(0.05)
             for event_type in ('mousePressed', 'mouseReleased'):
                 cdp.send('Input.dispatchMouseEvent', {
                     'type': event_type, 'x': state['x'], 'y': state['y'],
