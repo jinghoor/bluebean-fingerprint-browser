@@ -91,6 +91,28 @@ class CursorEventTest(unittest.TestCase):
         self.assertEqual(events[1], ("cursor_done", "type"))
         self.assertEqual(events[2], ("input", "Input.dispatchMouseEvent"))
 
+    def test_navigation_moves_cursor_before_page_navigate(self):
+        backend = BrowserBackend()
+        events = []
+
+        class FakeCdp:
+            def evaluate(self, expression, timeout=10.0, await_promise=False):
+                events.append(("evaluate", expression))
+                return '{"x": 400, "y": 300}'
+
+            def send(self, method, params=None, timeout=10.0):
+                events.append(("send", method))
+                return {"result": {"loaderId": "loader"}}
+
+        backend._cdp = lambda env: FakeCdp()
+        backend.env_state = lambda: {"active": "env-1"}
+        backend.cursor_event = lambda env, x, y, action: events.append(
+            ("cursor", action, x, y)) or True
+        result = backend.goto("env-1", "https://example.test", wait_ms=0)
+        self.assertEqual(result["waited_ms"], 0)
+        self.assertEqual(events[1], ("cursor", "navigate", 400.0, 300.0))
+        self.assertEqual(events[2], ("send", "Page.navigate"))
+
 
 if __name__ == "__main__":
     unittest.main()

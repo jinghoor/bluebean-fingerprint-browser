@@ -772,6 +772,17 @@ class BrowserBackend:
         started = time.monotonic()
         resolved_env = env or self.env_state().get('active', '')
         self.observations.pop(resolved_env, None)
+        # Navigation is a browser-control action even when the Agent chooses a
+        # direct URL instead of clicking a page link. Move the native pointer
+        # to a stable viewport anchor before dispatching the real navigation.
+        try:
+            raw_anchor = cdp.evaluate(
+                "JSON.stringify({x: innerWidth / 2, y: innerHeight / 2})")
+            anchor = json.loads(raw_anchor or "{}")
+            self.cursor_event(env, float(anchor.get("x", 0)),
+                              float(anchor.get("y", 0)), "navigate")
+        except Exception:
+            pass
         navigation = cdp.send("Page.navigate", {"url": url}, timeout=15)['result']
         if navigation.get('errorText') or navigation.get('isDownload'):
             return {'ok': False, 'url': url, 'navigation_sent': True,
