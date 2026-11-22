@@ -474,14 +474,15 @@ class BrowserBackend:
     OBSERVE_JS = r"""
 (() => {
   const out = [], names = [], idCounts = new Map(), siblingGroups = new WeakMap();
-  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup],[draggable=true],[ondrop],[ondragover]';
-  const customCandidateSelector = '[class*="select"],[class*="dropdown"],[class*="cascader"],[class*="combobox"],[class*="picker"],[class*="date"],[class*="time"],[class*="calendar"],[data-menu-item],[data-option]';
+  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=radio],[role=checkbox],[role=slider],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup],[tabindex]:not([tabindex="-1"]),[draggable=true],[ondrop],[ondragover]';
+  const customCandidateSelector = '[class*="select"],[class*="dropdown"],[class*="cascader"],[class*="combobox"],[class*="picker"],[class*="date"],[class*="time"],[class*="calendar"],[class*="circle-icon"],[class*="symbol-item"],[class*="ws-radio"],[class*="score"],[class*="evaluation"],[class*="nps"],[class*="geographical"],[class*="blank-mode-container"],[data-menu-item],[data-option]';
   const sel = summarySelector + ',' + customCandidateSelector + ',[onclick]';
   let count = 0, fingerprint = 0, id = 0;
   function customKind(el) {
     const cls = typeof el?.className === 'string' ? el.className : '';
     if (/(^|[-_\s])(question-cascader|ws-cascader|cascader)([-_\s]|$)/i.test(cls)) return 'custom-cascader';
     if (/(^|[-_\s])(q-date|q-time|date-picker|time-picker|calendar-picker)([-_\s]|$)/i.test(cls)) return 'custom-date-time';
+    if (/(^|[-_\s])(circle-icon|symbol-item|ws-radio|score-topic|q-score|evaluation|nps|blank-mode-container|geographical)([-_\s]|$)/i.test(cls)) return 'custom-choice';
     if (/(^|[-_\s])(select|dropdown|cascader|combobox|picker)([-_\s]|$)/i.test(cls)) return 'custom-dropdown';
     return '';
   }
@@ -501,6 +502,12 @@ class BrowserBackend:
         parent = parent.parentElement;
       }
       return true;
+    }
+    if (kind === 'custom-choice') {
+      if (el.querySelector('.circle-icon,.symbol-item,.ws-radio,[role=radio],[role=checkbox]')) return false;
+      const style = getComputedStyle(el);
+      return style.cursor === 'pointer' || el.tabIndex >= 0 || el.getAttribute('role') === 'radio' ||
+        el.getAttribute('role') === 'checkbox' || !!el.querySelector('[role=radio],[role=checkbox],input');
     }
     let dateParent = el.parentElement;
     while (dateParent) {
