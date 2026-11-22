@@ -481,7 +481,7 @@ class BrowserBackend:
     }
     return path.join(' > ');
   }
-  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option]';
+  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=tree],[role=treeitem],[aria-haspopup]';
   const sel = summarySelector + ',[onclick]';
   const names = [];
   let count = 0, fingerprint = 0;
@@ -518,6 +518,14 @@ class BrowserBackend:
     } : {};
     const inputState = el.matches('input[type=checkbox],input[type=radio]')
       ? {checked: el.checked, value: el.value || ''} : {};
+    const menuState = {
+      input_type: el.getAttribute('type'),
+      aria_haspopup: el.getAttribute('aria-haspopup'),
+      aria_expanded: el.getAttribute('aria-expanded'),
+      aria_selected: el.getAttribute('aria-selected'),
+      aria_level: el.getAttribute('aria-level'),
+      menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null,
+    };
     out.push({
       id: 'e' + (id++),
       tag: el.tagName.toLowerCase(),
@@ -532,10 +540,9 @@ class BrowserBackend:
       visual_only: false,
       selector: locator(el),
       value: 'value' in el ? String(el.value ?? '') : '',
-      aria_expanded: el.getAttribute('aria-expanded'),
-      aria_selected: el.getAttribute('aria-selected'),
       ...selectState,
       ...inputState,
+      ...menuState,
     });
   }
   return JSON.stringify({url: location.href, title: document.title,
@@ -1080,6 +1087,155 @@ class BrowserBackend:
                     'retry_hint': 'Observe the select again before retrying.'}
         return {'ok': True, 'element': element_id, 'multiple': multiple,
                 'selected': selected, 'trusted': trusted, 'mode': mode}
+
+    def set_date_time(self, env: str | None, element_id: str,
+                      value: str) -> dict:
+        """Set a native date/time input using its HTML value format."""
+        resolved_env = env or self.env_state().get("active", "")
+        observation = self.observations.get(resolved_env)
+        try:
+            if observation is None:
+                raise KeyError(element_id)
+            item = observation.by_id(element_id)
+        except KeyError:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'STALE_OBSERVATION',
+                    'error': 'Element id is not from the latest observation; observe again before setting date or time.',
+                    'next_action': 'observe'}
+        input_type = item.get('input_type') or ''
+        patterns = {
+            'date': r'^\d{4}-\d{2}-\d{2}$',
+            'time': r'^\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?$',
+            'datetime-local': r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?$',
+            'month': r'^\d{4}-\d{2}$',
+            'week': r'^\d{4}-W\d{2}$',
+        }
+        if input_type not in patterns:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'DATE_TIME_CONTROL_REQUIRED',
+                    'error': 'date_time works with native date, time, datetime-local, month, or week inputs.'}
+        if not isinstance(value, str) or not re.fullmatch(patterns[input_type], value):
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'INVALID_DATE_TIME_VALUE',
+                    'error': f'Use the HTML {input_type} value format.'}
+        selector = item.get('selector')
+        cdp = self._cdp(env)
+        if observation.document_token:
+            check = self.wait_for(env, selector=selector,
+                                  document_token=observation.document_token,
+                                  state='actionable', timeout_ms=2000)
+            if not check.get('ok'):
+                return check
+        x, y, w, h = item['bbox']
+        cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
+        if item.get('point'):
+            cx, cy = item['point']
+        self.cursor_event(env, cx, cy, 'date-time')
+        for event_type in ('mousePressed', 'mouseReleased'):
+            cdp.send('Input.dispatchMouseEvent', {
+                'type': event_type, 'x': cx, 'y': cy,
+                'button': 'left', 'clickCount': 1})
+        script = (
+            "(() => { const el = document.querySelector(" + json.dumps(selector) +
+            "); if (!el || el.tagName !== 'INPUT' || el.type !== " +
+            json.dumps(input_type) + ") return ''; const setter = "
+            "Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;"
+            "setter.call(el, " + json.dumps(value) + ");"
+            "el.dispatchEvent(new Event('input', {bubbles:true}));"
+            "el.dispatchEvent(new Event('change', {bubbles:true}));"
+            "el.blur(); return JSON.stringify({value:el.value,valid:el.value === " +
+            json.dumps(value) + "}); })()")
+        raw = cdp.evaluate(script, timeout=5)
+        state = json.loads(raw or '{}') if raw else {}
+        if state.get('value') != value:
+            return {'ok': False, 'action_sent': True,
+                    'error_code': 'DATE_TIME_NOT_APPLIED',
+                    'error': 'The browser rejected the supplied date or time value.',
+                    'value': state.get('value', ''), 'outcome_unknown': True,
+                    'retry_hint': 'Observe the control and verify its min, max, and step constraints.'}
+        return {'ok': True, 'element': element_id, 'input_type': input_type,
+                'value': value, 'trusted': False, 'mode': 'native-form-events'}
+
+    def menu_select(self, env: str | None, element_id: str,
+                    path: list[str], timeout_ms: int = 10000) -> dict:
+        """Click a trigger and then each visible item in a cascading menu path."""
+        resolved_env = env or self.env_state().get('active', '')
+        observation = self.observations.get(resolved_env)
+        try:
+            if observation is None:
+                raise KeyError(element_id)
+            trigger = observation.by_id(element_id)
+        except KeyError:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'STALE_OBSERVATION',
+                    'error': 'Element id is not from the latest observation; observe again before opening the menu.',
+                    'next_action': 'observe'}
+        if not isinstance(path, list) or not path or any(not isinstance(label, str) or not label.strip() for label in path):
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'INVALID_MENU_PATH',
+                    'error': 'menu_select.path must contain one or more non-empty labels.'}
+        if not trigger.get('selector'):
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'MENU_TRIGGER_UNAVAILABLE',
+                    'error': 'The menu trigger has no stable selector; observe again.',
+                    'next_action': 'observe'}
+        cdp = self._cdp(env)
+        if observation.document_token:
+            check = self.wait_for(env, selector=trigger['selector'],
+                                  document_token=observation.document_token,
+                                  state='actionable', timeout_ms=2000)
+            if not check.get('ok'):
+                return check
+        x, y, w, h = trigger['bbox']
+        cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
+        if trigger.get('point'):
+            cx, cy = trigger['point']
+        self.cursor_event(env, cx, cy, 'menu')
+        for event_type in ('mousePressed', 'mouseReleased'):
+            cdp.send('Input.dispatchMouseEvent', {
+                'type': event_type, 'x': cx, 'y': cy,
+                'button': 'left', 'clickCount': 1})
+
+        matcher = (
+            "(label => { const wanted = label.trim().replace(/\\s+/g, ' ').toLocaleLowerCase();"
+            " const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);"
+            " return r.width >= 4 && r.height >= 4 && r.bottom > 0 && r.right > 0 &&"
+            " r.top < innerHeight && r.left < innerWidth && s.visibility !== 'hidden' &&"
+            " s.display !== 'none' && s.pointerEvents !== 'none'; };"
+            " const nodes = [...document.querySelectorAll('[role=menuitem],[role=option],[role=treeitem],"
+            "[data-menu-item],li,button,a')].filter(visible);"
+            " const exact = nodes.filter(el => (el.innerText || el.textContent || '').trim()"
+            ".replace(/\\s+/g, ' ').toLocaleLowerCase() === wanted);"
+            " const el = exact[exact.length - 1]; if (!el) return null; const r = el.getBoundingClientRect();"
+            " return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2,label:(el.innerText||el.textContent||'').trim(),"
+            "expanded:el.getAttribute('aria-expanded')}); })")
+        timeout = max(1000, min(30000, int(timeout_ms))) / 1000
+        chosen = []
+        for label in path:
+            deadline = time.monotonic() + timeout
+            state = None
+            while time.monotonic() < deadline:
+                raw = cdp.evaluate(matcher + "(" + json.dumps(label) + ")", timeout=5)
+                state = json.loads(raw) if raw else None
+                if state:
+                    break
+                time.sleep(0.05)
+            if not state:
+                return {'ok': False, 'action_sent': True,
+                        'error_code': 'MENU_ITEM_NOT_FOUND',
+                        'error': 'Menu item not visible: ' + label,
+                        'path': chosen + [label],
+                        'next_action': 'observe'}
+            self.cursor_event(env, state['x'], state['y'], 'menu')
+            for event_type in ('mousePressed', 'mouseReleased'):
+                cdp.send('Input.dispatchMouseEvent', {
+                    'type': event_type, 'x': state['x'], 'y': state['y'],
+                    'button': 'left', 'clickCount': 1})
+            chosen.append(state.get('label') or label)
+            cdp.evaluate('new Promise(resolve => setTimeout(resolve, 0))',
+                         timeout=5, await_promise=True)
+        return {'ok': True, 'element': element_id, 'path': chosen,
+                'trusted': True, 'mode': 'cascading-menu'}
 
     def scroll(self, env: str | None, delta_x: float = 0,
                delta_y: float = 640, x: float | None = None,
