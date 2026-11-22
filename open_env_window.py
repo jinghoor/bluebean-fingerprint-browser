@@ -32,10 +32,64 @@ sys.path.insert(0, str(HERE))
 import bluebean_paths  # noqa: E402
 from bluebean_paths import CHROME_EXE, PROFILE_DIR, DATA_ROOT  # noqa: E402
 from _env_driver import (                                     # noqa: E402
-    EnvBrowser, focus_window, free_port, window_rect, windows_of_process)
+    Cdp, EnvBrowser, focus_window, free_port, window_rect, windows_of_process)
 
 DEFAULT_CHROME = str(CHROME_EXE)
 DEFAULT_PROFILE = str(PROFILE_DIR)
+
+
+def repair_dsh_auth_cookies(browser: EnvBrowser, profile: Path) -> int:
+    """Remove stale loopback DSH auth cookies before attaching the workbench.
+
+    Every ephemeral ``dsh web`` port uses a distinct cookie name. After many
+    restarts, sending all of those cookies can exceed the local server header
+    limit and the UI reports ``authentication required`` or HTTP 431. Only
+    loopback cookies with the DSH auth prefix are removed. Website cookies and
+    account data remain untouched.
+    """
+    removed = 0
+    try:
+        targets = browser.targets()
+        for target in targets:
+            websocket_url = target.get("webSocketDebuggerUrl")
+            if not websocket_url:
+                continue
+            with Cdp(websocket_url) as connection:
+                cookies = connection.send("Network.getAllCookies").get(
+                    "result", {}).get("cookies", [])
+                stale = [cookie for cookie in cookies
+                         if cookie.get("domain") == "127.0.0.1" and
+                         str(cookie.get("name", "")).startswith("dsh-auth-")]
+                for cookie in stale:
+                    connection.send("Network.deleteCookies", {
+                        "name": cookie["name"],
+                        "domain": "127.0.0.1",
+                        "path": cookie.get("path", "/"),
+                    })
+                removed += len(stale)
+            if removed:
+                break
+    except Exception as exc:  # noqa: BLE001
+        print(f"  DSH auth-cookie cleanup skipped: {type(exc).__name__}: {exc}")
+        return removed
+
+    if removed:
+        try:
+            import _dsh_web
+            import env_cli
+            state = _dsh_web.load_state()
+            url = state.get("url") if state.get("ok", True) else ""
+            if url:
+                reply = env_cli.send(
+                    env_cli.resolve_profile_dir(profile),
+                    {"command": "overlay", "on": True, "url": url}, 35)
+                if not reply.get("ok"):
+                    print(f"  DSH auth-cookie refresh failed: {reply.get('error')}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  DSH auth-cookie refresh skipped: {type(exc).__name__}: {exc}")
+    if removed:
+        print(f"  removed {removed} stale DSH loopback auth cookie(s)")
+    return removed
 
 def ensure_proxies_bound(profile: pathlib.Path) -> None:
     """Make sure every environment still points at its own relay before a window is shown."""
@@ -194,6 +248,7 @@ def main() -> int:
             if not existing and not browser.start(timeout=30):
                 report_browser_failure(browser)
                 return 2
+            repair_dsh_auth_cookies(browser, profile)
             seconds = round(time.monotonic() - started, 3)
             atomic_json(DATA_ROOT / ".startup-browser.json", {
                 "ok": True, "pid": existing or browser.chrome_pid, "seconds": seconds,
@@ -251,6 +306,7 @@ def main() -> int:
     ensure_proxies_bound(profile)
     if existing:
         print(f"browser already running for this profile: pid {existing}")
+        repair_dsh_auth_cookies(browser, profile)
         print("  reusing it; only the panel request below is sent.")
         payload = browser.cli("panel")
         print("  panel:", payload)
@@ -264,6 +320,7 @@ def main() -> int:
         report_browser_failure(browser)
         return 2
     print(f"  pid: {browser.chrome_pid}")
+    repair_dsh_auth_cookies(browser, profile)
 
     # Only explicit user/API actions may create or activate an environment.
     # Never repopulate an empty profile or infer demo data from environment names.

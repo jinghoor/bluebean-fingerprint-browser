@@ -5,6 +5,7 @@
 - Add a safe official DSH updater using the signed stable feed, SHA-512 validation, an atomic program-directory swap, and a rollback backup. DSH homes, sessions, plugins, accounts, environments, and browser data stay outside the replaceable runtime.
 - Add a right-side conversation dock for “我的环境” with floating and fixed-insert modes.
 - Keep the DSH sidebar and conversation interactive while the middle browser page remains visible and clickable.
+- Remove stale loopback DSH authentication cookies during browser startup and refresh the current workbench URL, preventing accumulated `dsh-auth-*` cookies from causing HTTP 431 or an authentication-required screen.
 - Add a native compositor-side Agent pointer for move, click, focus, typing and scrolling. It is isolated per environment and does not modify page content or intercept page input.
 - Add a low-latency scroll action to the browser control bridge with the same native pointer feedback.
 - Keep custom development profiles aligned across the browser, bridge, and environment services.
