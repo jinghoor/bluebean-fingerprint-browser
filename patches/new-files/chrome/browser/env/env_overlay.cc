@@ -101,7 +101,7 @@ class EnvAutomationCursorView : public views::View {
 
   int ShowAt(const gfx::PointF& target, std::string action) {
     const base::TimeTicks now = base::TimeTicks::Now();
-    from_ = visible_ ? position_ : target;
+    from_ = has_position_ ? position_ : target;
     target_ = target;
     position_ = from_;
     action_ = std::move(action);
@@ -129,15 +129,22 @@ class EnvAutomationCursorView : public views::View {
     duration_ = base::Milliseconds(duration_ms);
     visible_ = true;
     SetVisible(true);
+    idle_timer_.Stop();
     timer_.Start(FROM_HERE, base::Milliseconds(16),
                  base::BindRepeating(&EnvAutomationCursorView::Animate,
                                      weak_factory_.GetWeakPtr()));
     SchedulePaint();
+    idle_timer_.Start(
+        FROM_HERE, duration_ + base::Milliseconds(1200),
+        base::BindOnce(&EnvAutomationCursorView::HideCursor,
+                       weak_factory_.GetWeakPtr()));
+    has_position_ = true;
     return duration_ms;
   }
 
   void HideCursor() {
     timer_.Stop();
+    idle_timer_.Stop();
     visible_ = false;
     SetVisible(false);
     SchedulePaint();
@@ -246,8 +253,10 @@ class EnvAutomationCursorView : public views::View {
   base::TimeTicks started_;
   base::TimeDelta duration_ = base::Milliseconds(90);
   float arc_side_ = 1.0f;
+  bool has_position_ = false;
   bool visible_ = false;
   base::RepeatingTimer timer_;
+  base::OneShotTimer idle_timer_;
   base::WeakPtrFactory<EnvAutomationCursorView> weak_factory_{this};
 };
 
@@ -477,8 +486,19 @@ class EnvOverlayHost : public views::View,
  private:
   void LayoutContents();
   gfx::PointF PagePointToViewPoint(const gfx::PointF& point) const {
-    if (!cursor_view_) {
+    if (!cursor_view_ || !browser_view_) {
       return point;
+    }
+    // CDP coordinates are relative to the active WebContents viewport. Map
+    // that viewport's live screen origin into the cursor view on every event.
+    // This follows window moves, resizes, dock reservations and display DPI
+    // changes instead of relying on a cached browser-frame offset.
+    if (views::WebView* contents = browser_view_->GetActiveContentsWebView()) {
+      if (content::WebContents* web_contents = contents->GetWebContents()) {
+        gfx::Point origin = web_contents->GetViewBounds().origin();
+        views::View::ConvertPointFromScreen(cursor_view_, &origin);
+        return gfx::PointF(origin.x() + point.x(), origin.y() + point.y());
+      }
     }
     const gfx::Rect bounds = cursor_view_->bounds();
     return gfx::PointF(point.x() - bounds.x(), point.y() - bounds.y());
