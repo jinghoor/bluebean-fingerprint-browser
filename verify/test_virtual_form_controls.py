@@ -116,7 +116,7 @@ try:
 
     # Fill every virtual row once. This is deliberately longer than the
     # rendered window, so the test cannot pass by exercising only static DOM.
-    targets = list(range(120))
+    targets = list(range(120)) + [119, 80, 40, 0]
     filled = {}
     current = initial
     previous_ids = set(initial_rows)
