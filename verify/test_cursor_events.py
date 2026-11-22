@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from browser_backend import BrowserBackend
+from browser_backend import BrowserBackend, Observation
 
 
 class CursorEventTest(unittest.TestCase):
@@ -63,6 +63,33 @@ class CursorEventTest(unittest.TestCase):
             with patch("browser_backend.time.sleep") as sleep:
                 self.assertTrue(backend.cursor_event("env-1", 80, 90, "click"))
             sleep.assert_called_once_with(0.145)
+
+    def test_typing_waits_for_cursor_event_before_input(self):
+        backend = BrowserBackend()
+        events = []
+
+        class FakeCdp:
+            def send(self, method, params=None, timeout=10.0):
+                events.append(("input", method))
+                return {"result": {}}
+
+        backend.observations["env-1"] = Observation(
+            env="env-1", epoch=1,
+            items=[{"id": "e1", "bbox": [20, 30, 120, 32],
+                    "name": "email", "selector": "#email"}],
+        )
+        backend._cdp = lambda env: FakeCdp()
+
+        def cursor_event(env, x, y, action):
+            events.extend([("cursor_start", action), ("cursor_done", action)])
+            return True
+
+        backend.cursor_event = cursor_event
+        result = backend.type_text("env-1", "e1", "ab")
+        self.assertEqual(result["typed"], "ab")
+        self.assertEqual(events[0], ("cursor_start", "type"))
+        self.assertEqual(events[1], ("cursor_done", "type"))
+        self.assertEqual(events[2], ("input", "Input.dispatchMouseEvent"))
 
 
 if __name__ == "__main__":
