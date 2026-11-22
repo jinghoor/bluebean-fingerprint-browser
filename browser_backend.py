@@ -9,6 +9,7 @@ page target. Everything else is an error rather than a silent wrong-tab action.
 from __future__ import annotations
 
 import json
+import math
 import re
 import secrets
 import time
@@ -1202,15 +1203,22 @@ class BrowserBackend:
                 return None
             if not isinstance(value, (list, tuple)) or len(value) != 2:
                 raise ValueError('canvas points must be [x, y]')
+            if any(isinstance(item, bool) or not isinstance(item, (int, float)) or
+                   not math.isfinite(float(item)) for item in value):
+                raise ValueError('canvas points must contain finite numbers')
             raw = cdp.evaluate("JSON.stringify((() => { const el=" +
                 ("document.querySelector(" + json.dumps(selector) + ")" if selector else "null") +
-                "; if(!el) return {x:0,y:0}; const r=el.getBoundingClientRect(); return {x:r.left,y:r.top}; })())", timeout=5) if selector else None
-            origin = json.loads(raw or '{"x":0,"y":0}') if raw else {'x':0,'y':0}
+                "; if(!el) return {found:false}; const r=el.getBoundingClientRect(); return {found:true,x:r.left,y:r.top}; })())", timeout=5) if selector else None
+            origin = json.loads(raw or '{"found":false}') if raw else {'found':False}
+            if selector and not origin.get('found'):
+                raise LookupError('canvas selector was not found in the current page')
             return [float(value[0]) + float(origin.get('x',0)), float(value[1]) + float(origin.get('y',0))]
         try:
             point = resolve(point)
             from_point = resolve(from_point)
             to_point = resolve(to_point)
+        except LookupError as exc:
+            return {'ok':False,'error_code':'CANVAS_SELECTOR_NOT_FOUND','error':str(exc)}
         except (TypeError, ValueError) as exc:
             return {'ok':False,'error_code':'INVALID_CANVAS_POINT','error':str(exc)}
         if action in {'connect','pan','move'} and (not from_point or not to_point):
@@ -1219,53 +1227,78 @@ class BrowserBackend:
         if action in {'edit','disconnect','select','zoom'} and not point:
             return {'ok':False,'error_code':'CANVAS_POINT_REQUIRED',
                     'error':'This canvas action requires point.'}
+        if isinstance(duration_ms, bool) or not isinstance(duration_ms, (int, float)) or not math.isfinite(float(duration_ms)):
+            return {'ok':False,'error_code':'INVALID_CANVAS_DURATION',
+                    'error':'canvas.duration_ms must be a finite number.'}
+        duration_ms = max(0, min(5000, float(duration_ms)))
+        if isinstance(delta_y, bool) or not isinstance(delta_y, (int, float)) or not math.isfinite(float(delta_y)):
+            return {'ok':False,'error_code':'INVALID_CANVAS_DELTA',
+                    'error':'canvas.delta_y must be a finite number.'}
         def mouse(kind, x, y, button='none', count=1, mods=0):
             cdp.send('Input.dispatchMouseEvent', {'type':kind,'x':x,'y':y,
                 'button':button,'clickCount':count,'modifiers':mods})
+        def focus_board():
+            if not selector:
+                return
+            cdp.evaluate("(() => { const el=document.querySelector(" + json.dumps(selector) + "); if (el && el.focus) el.focus({preventScroll:true}); return !!el; })()", timeout=5)
         def move_path(start, end, button='left'):
-            steps=max(2,min(40,int(max(40,duration_ms)/16)))
+            steps=max(2,min(60,int(max(40,duration_ms)/16)))
             for index in range(1,steps+1):
-                progress=index/steps
+                linear=index/steps
+                progress=linear * linear * (3 - 2 * linear)
                 x=start[0]+(end[0]-start[0])*progress
                 y=start[1]+(end[1]-start[1])*progress
                 self.cursor_event(env,x,y,'canvas')
                 mouse('mouseMoved',x,y,button)
-                time.sleep(max(.001,duration_ms/1000/steps))
+                if duration_ms:
+                    time.sleep(max(.001,duration_ms/1000/steps))
         mods=0
         for token in modifiers or []:
             try: mods |= self._key_definition(token)[3]
             except ValueError: pass
         if action == 'connect' or action == 'move':
+            focus_board()
             self.cursor_event(env,from_point[0],from_point[1],'canvas')
             mouse('mouseMoved',from_point[0],from_point[1], 'none', 1, mods)
             mouse('mousePressed',from_point[0],from_point[1], 'left', 1, mods)
             move_path(from_point,to_point,'left')
             mouse('mouseReleased',to_point[0],to_point[1], 'left', 1, mods)
         elif action == 'pan':
+            focus_board()
             self.cursor_event(env,from_point[0],from_point[1],'canvas')
             mouse('mouseMoved',from_point[0],from_point[1], 'none', 1, mods)
             mouse('mousePressed',from_point[0],from_point[1], 'middle', 1, mods)
             move_path(from_point,to_point,'middle')
             mouse('mouseReleased',to_point[0],to_point[1], 'middle', 1, mods)
         elif action == 'zoom':
+            focus_board()
             self.cursor_event(env,point[0],point[1],'canvas')
             mouse('mouseMoved',point[0],point[1], 'none', 1, mods)
             cdp.send('Input.dispatchMouseEvent', {'type':'mouseWheel','x':point[0],'y':point[1],
                 'deltaX':0,'deltaY':float(delta_y),'modifiers':mods})
         elif action == 'select':
+            focus_board()
             self.cursor_event(env,point[0],point[1],'canvas')
             mouse('mouseMoved',point[0],point[1], 'none', 1, mods)
             mouse('mousePressed',point[0],point[1], 'left', 1, mods)
             mouse('mouseReleased',point[0],point[1], 'left', 1, mods)
         elif action == 'disconnect':
+            focus_board()
             self.cursor_event(env,point[0],point[1],'canvas')
             mouse('mouseMoved',point[0],point[1], 'none', 1, mods)
             mouse('mousePressed',point[0],point[1], 'left', 1, mods)
             mouse('mouseReleased',point[0],point[1], 'left', 1, mods)
+            focus_board()
             self._dispatch_keys(cdp,['DELETE'])
         elif action == 'edit':
+            focus_board()
             self.cursor_event(env,point[0],point[1],'canvas')
             mouse('mouseMoved',point[0],point[1], 'none', 2, mods)
+            # A few canvas editors only synthesize dblclick after two complete
+            # click cycles. Sending both cycles keeps those editors compatible
+            # while clickCount=2 preserves the native double-click semantics.
+            mouse('mousePressed',point[0],point[1], 'left', 1, mods)
+            mouse('mouseReleased',point[0],point[1], 'left', 1, mods)
             mouse('mousePressed',point[0],point[1], 'left', 2, mods)
             mouse('mouseReleased',point[0],point[1], 'left', 2, mods)
             if replace:
@@ -1276,7 +1309,8 @@ class BrowserBackend:
         elif action == 'cancel':
             self._dispatch_keys(cdp,['ESC'])
         return {'ok':True,'action':action,'trusted':True,
-                'point':point,'from_point':from_point,'to_point':to_point}
+                'point':point,'from_point':from_point,'to_point':to_point,
+                'duration_ms':round(duration_ms, 2)}
 
     def scroll_into_view(self, env: str | None, element_id: str | None = None,
                          selector: str | None = None) -> dict:

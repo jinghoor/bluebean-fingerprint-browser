@@ -15,6 +15,8 @@
 - Add explicit clipboard read/write and accessibility-tree inspection capabilities for tasks that need semantic page context.
 - Extend wait_for with value, checked, selected, expanded, iframe, and Shadow DOM conditions for post-action verification.
 - Add an infinite-canvas action protocol for node movement, connections, disconnections, editing, panning, zooming, selection, and Escape cancellation.
+- Make infinite-canvas actions validate finite coordinates and the selected board, focus the board before keyboard follow-up, use complete double-click cycles for editing, and preserve the zoom anchor while panning and zooming.
+- Add a ten-round graph-editor regression that verifies node selection, connections, disconnections, editing, cancellation, layout-shifted coordinates, panning, anchored zooming, and invalid-input rejection.
 - Keep fixed-insert conversation docks persistent when the user clicks the page or other browser content. Page input continues normally without folding the dock.
 - Keep the DSH sidebar and conversation interactive while the middle browser page remains visible and clickable.
 - Keep DSH full-permission confirmation dialogs fully interactive, including releases that render the checkbox panel without dialog semantics.

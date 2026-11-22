@@ -85,6 +85,24 @@ class ObservationTests(unittest.TestCase):
         self.assertNotIn('A',bridge.snapshots)
         bridge.backend.snapshot.assert_not_called()
 
+    def test_bridge_dispatches_canvas_protocol_with_all_pointer_arguments(self):
+        bridge=Bridge.__new__(Bridge)
+        bridge.backend=Mock()
+        bridge.backend.step_context.side_effect=nullcontext
+        bridge.backend.canvas_action.return_value={'ok':True,'action':'connect','trusted':True}
+        bridge.backend.pending_dialog.return_value=None
+        bridge.backend.snapshot.return_value={'url':'https://canvas.test/','count':1,
+                                              'names':['infinite canvas'],'states':[]}
+        bridge.permissions={'preset':'full'}
+        bridge.snapshots={}
+        payload={'action':'connect','selector':'#board','from_point':[20,30],
+                 'to_point':[240,180],'duration_ms':180,'modifiers':['SHIFT']}
+        with patch('lan_bridge.audit'):
+            result=bridge.run_step('A',{'canvas':payload},session_id='canvas-session')
+        self.assertTrue(result['ok'])
+        bridge.backend.canvas_action.assert_called_once_with(
+            'A','connect','#board',None,[20,30],[240,180],None,False,0,180,['SHIFT'])
+
 
 class DiscoveryTests(unittest.TestCase):
     def test_failed_ownership_check_is_not_discovered_twice(self):
