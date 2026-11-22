@@ -31,7 +31,7 @@ ENTRY_MODULES = {
     "_runtime_state.py", "_startup_services.py", "env_startup_check.py",
     "bluebean_paths.py", "bind_env_proxies.py", "fp_launcher.py", "fp_proxy.py",
     "env_seed.py", "env_cli.py", "_ensure_bridge.py", "_ensure_relays.py",
-    "_dsh_web.py", "lan_bridge.py", "browser_backend.py", "dsh_sessions.py",
+      "_dsh_web.py", "dsh_updater.py", "lan_bridge.py", "browser_backend.py", "dsh_sessions.py",
     "session_browser_scope.py", "dsh_client.py", "local_account_vault.py",
     "environment_agent.py", "environment_api.py", "environment_accounts.py",
     "environment_import.py", "environment_status.py",

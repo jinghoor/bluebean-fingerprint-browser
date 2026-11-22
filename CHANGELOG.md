@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a safe official DSH updater using the signed stable feed, SHA-512 validation, an atomic program-directory swap, and a rollback backup. DSH homes, sessions, plugins, accounts, environments, and browser data stay outside the replaceable runtime.
 - Add a right-side conversation dock for “我的环境” with floating and fixed-insert modes.
 - Keep the DSH sidebar and conversation interactive while the middle browser page remains visible and clickable.
 - Keep custom development profiles aligned across the browser, bridge, and environment services.

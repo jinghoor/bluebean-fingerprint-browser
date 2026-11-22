@@ -26,6 +26,18 @@ python build-installer.py
 
 构建结果写入 `build/installers`。独立安装验证脚本见 `installer/verify_install.py`。自动验收需要使用一次性测试目录和独立数据目录。
 
+### DSH 官方无损升级
+
+`dsh_updater.py` 使用 DSH 官方稳定更新源，先校验版本、文件大小和 SHA-512，再替换程序目录并保留回滚备份。`Data\DSH` 中的会话、插件、账号、环境和浏览器数据不会随程序目录移动。先关闭蓝豆浏览器及其后台服务，再执行：
+
+```powershell
+python dsh_updater.py --check
+$env:BLUEBEAN_DSH_EXTRACTOR = "C:\\Program Files\\7-Zip\\7z.exe"
+python dsh_updater.py --update
+```
+
+更新失败会保留旧目录和临时目录，便于重试或回滚。
+
 本地交付前须纠正安装 EXE 可能继承的 Low Integrity 标签，构建脚本已内置此检查。
 如果又将文件复制到另一个交付目录，最后运行
 `python installer/windows_security.py "安装包的完整路径"` 再验证最终文件。
