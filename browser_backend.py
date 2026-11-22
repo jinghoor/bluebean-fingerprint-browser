@@ -577,12 +577,14 @@ class BrowserBackend:
       const cs = getComputedStyle(el);
       const x = r.left + originX, y = r.top + originY;
       const clipped = {left: Math.max(0, x), top: Math.max(0, y), right: Math.min(innerWidth, x + r.width), bottom: Math.min(innerHeight, y + r.height)};
-      const visible = cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0 &&
-        clipped.right > clipped.left && clipped.bottom > clipped.top &&
+      const rendered = cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0 &&
+        r.width >= 4 && r.height >= 4 &&
         (!el.checkVisibility || el.checkVisibility({checkOpacity:true, checkVisibilityCSS:true}));
-      if (!visible) continue;
-      const cx = (clipped.left + clipped.right) / 2, cy = (clipped.top + clipped.bottom) / 2;
-      const hit = root === document && document.elementFromPoint(cx, cy);
+      if (!rendered) continue;
+      const inViewport = clipped.right > clipped.left && clipped.bottom > clipped.top;
+      const cx = inViewport ? (clipped.left + clipped.right) / 2 : x + r.width / 2;
+      const cy = inViewport ? (clipped.top + clipped.bottom) / 2 : y + r.height / 2;
+      const hit = root === document && inViewport && document.elementFromPoint(cx, cy);
       const name = (rawLabel || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 60);
       const selectState = el.tagName === 'SELECT' ? {
         multiple: el.multiple,
@@ -591,7 +593,7 @@ class BrowserBackend:
       } : {};
       const inputState = el.matches('input[type=checkbox],input[type=radio]') ? {checked: el.checked, value: el.value || ''} : {};
       const menuState = {input_type: el.getAttribute('type'), aria_haspopup: el.getAttribute('aria-haspopup'), aria_expanded: el.getAttribute('aria-expanded'), aria_selected: el.getAttribute('aria-selected'), aria_current: el.getAttribute('aria-current'), aria_level: el.getAttribute('aria-level'), menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null, custom_control:customControl, control_kind:customControl ? customKind(el) : null};
-      out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (customControl ? 'combobox' : el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport: clipped.right > clipped.left && clipped.bottom > clipped.top, clickable:cs.pointerEvents !== 'none', occluded: root === document ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...menuState});
+      out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (customControl ? 'combobox' : el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport:inViewport, clickable:cs.pointerEvents !== 'none', occluded: root === document && inViewport ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...menuState});
     }
     if (out.length >= 120) return;
     let frames = [];
@@ -646,6 +648,19 @@ class BrowserBackend:
         return data
 
     def wait_for(self, env: str | None, **condition) -> dict:
+        auto_scroll = bool(condition.pop('auto_scroll', False))
+        if auto_scroll and condition.get('selector'):
+            selector = condition['selector']
+            frames = json.dumps(condition.get('frame_path', []), ensure_ascii=False)
+            shadows = json.dumps(condition.get('shadow_path', []), ensure_ascii=False)
+            self._cdp(env).evaluate(
+                "(() => { let root=document; for (const s of " + frames + ") {"
+                "const frame=root.querySelector(s); root=frame&&frame.contentDocument; if(!root)return false; }"
+                "for (const s of " + shadows + ") { const host=root.querySelector(s); root=host&&host.shadowRoot; if(!root)return false; }"
+                "const el=root.querySelector(" + json.dumps(selector) + "); if(!el)return false;"
+                "const r=el.getBoundingClientRect(); if(r.top<0||r.bottom>innerHeight||r.left<0||r.right>innerWidth)"
+                "el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}); return true; })()",
+                timeout=5)
         return wait_for_page(self._cdp(env), condition)
 
     # ------------------------------------------------------------------- actions
@@ -967,7 +982,7 @@ class BrowserBackend:
         if item.get('selector') and observation.document_token:
             check = self.wait_for(env, selector=item['selector'], document_token=observation.document_token,
                 identity={key:item.get(key,'') for key in ('tag','name','href')},
-                state='actionable', timeout_ms=2000,
+                state='actionable', timeout_ms=2000, auto_scroll=True,
                 frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
             if not check.get('ok'):
                 return check
@@ -1059,7 +1074,7 @@ class BrowserBackend:
         if item.get('selector') and observation.document_token:
             check = self.wait_for(env, selector=item['selector'], document_token=observation.document_token,
                 identity={key:item.get(key,'') for key in ('tag','name','href')},
-                state='actionable', editable=editable, timeout_ms=2000,
+                state='actionable', editable=editable, timeout_ms=2000, auto_scroll=True,
                 frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
             if not check.get('ok'):
                 return check
@@ -1217,7 +1232,7 @@ class BrowserBackend:
         for item in (source, target):
             if item.get('selector') and observation.document_token:
                 check = self.wait_for(env, selector=item['selector'], document_token=observation.document_token,
-                    identity={key:item.get(key,'') for key in ('tag','name','href')}, state='actionable', timeout_ms=2000,
+                    identity={key:item.get(key,'') for key in ('tag','name','href')}, state='actionable', timeout_ms=2000, auto_scroll=True,
                     frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
                 if not check.get('ok'):
                     return check
@@ -1534,7 +1549,7 @@ class BrowserBackend:
         if observation.document_token:
             check = self.wait_for(env, selector=selector,
                                   document_token=observation.document_token,
-                                  state='actionable', timeout_ms=2000,
+                                  state='actionable', timeout_ms=2000, auto_scroll=True,
                                   frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
             if not check.get('ok'):
                 return check
@@ -1819,7 +1834,7 @@ class BrowserBackend:
         if observation.document_token:
             check = self.wait_for(env, selector=selector,
                                   document_token=observation.document_token,
-                                  state='actionable', timeout_ms=2000,
+                                  state='actionable', timeout_ms=2000, auto_scroll=True,
                                   frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
             if not check.get('ok'):
                 return check
@@ -1879,7 +1894,7 @@ class BrowserBackend:
         if observation.document_token:
             check = self.wait_for(env, selector=trigger['selector'],
                                   document_token=observation.document_token,
-                                  state='actionable', timeout_ms=2000,
+                                  state='actionable', timeout_ms=2000, auto_scroll=True,
                                   frame_path=trigger.get('frame_path', []),
                                   shadow_path=trigger.get('shadow_path', []))
             if not check.get('ok'):

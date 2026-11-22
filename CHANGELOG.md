@@ -20,6 +20,7 @@
 - Rebind the native DSH overlay to the new authenticated Web URL after an idle DSH Web restart, preventing the assistant panel from disappearing after a service reload.
 - Make cascading menu selection tolerate an already-open popup and labels with visual prefixes such as `A.` or `2.`, avoiding the trigger toggle and false `MENU_ITEM_NOT_FOUND` retries.
 - Observe custom scale, star, NPS, radio, and geolocation controls as actionable choices, including the location permission handoff.
+- Keep rendered controls outside the current viewport in observe results and automatically scroll them into a stable visible position before Agent actions.
 - Make infinite-canvas actions validate finite coordinates and the selected board, focus the board before keyboard follow-up, use complete double-click cycles for editing, and preserve the zoom anchor while panning and zooming.
 - Add a ten-round graph-editor regression that verifies node selection, connections, disconnections, editing, cancellation, layout-shifted coordinates, panning, anchored zooming, and invalid-input rejection.
 - Keep fixed-insert conversation docks persistent when the user clicks the page or other browser content. Page input continues normally without folding the dock.

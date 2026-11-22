@@ -21,7 +21,7 @@ PROFILE.mkdir(parents=True)
 PAGE = '''<!doctype html><input id="text" value="old"><button id="submit">提交</button>
 <input id="check" type="checkbox"><input id="range" type="range" min="0" max="100" value="10">
 <input id="file" type="file"><button id="drag" draggable="true">拖动</button><button id="drop">放置</button><a id="download" href="/download">下载</a>
-<div id="offscreen" style="margin-top:1800px">目标区域</div>
+<div id="offscreen" style="margin-top:1800px">目标区域</div><input id="offscreen-input" style="margin-top:120px" value="old-offscreen">
 <pre id="state"></pre><script>drag.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain','ok'));drop.addEventListener('dragover',e=>e.preventDefault());drop.addEventListener('drop',e=>state.textContent+='drop:yes\\n');
 for(const x of [text,check,range,file]) for(const t of ['input','change'])
   x.addEventListener(t,e=>state.textContent+=x.id+':'+t+':'+e.isTrusted+'\\n');
@@ -85,7 +85,8 @@ try:
     wait_for_target(backend, env_id)
     observed = backend.observe(env_id)
     controls = {item["selector"]: item for item in observed["elements"]}
-    assert "#text" in controls and "#check" in controls and "#range" in controls and "#file" in controls and "#drag" in controls and "#drop" in controls and "#download" in controls
+    assert "#text" in controls and "#check" in controls and "#range" in controls and "#file" in controls and "#drag" in controls and "#drop" in controls and "#download" in controls and "#offscreen-input" in controls
+    assert controls["#offscreen-input"]["in_viewport"] is False
     report["checks"].append("observe_finds_editable_check_range_file_controls")
 
     typed = backend.type_text(env_id, controls["#text"]["id"], "new", replace=True)
@@ -112,9 +113,11 @@ try:
     assert uploaded["ok"] and uploaded["file_count"] == 1
     scrolled = backend.scroll_into_view(env_id, selector="#offscreen")
     assert scrolled["ok"] and scrolled["point"][1] > 0
+    offscreen_typed = backend.type_text(env_id, controls["#offscreen-input"]["id"], "visible", replace=True)
+    assert offscreen_typed["typed"] == "visible"
     state = json.loads(backend._cdp(env_id).evaluate(
-        "JSON.stringify({text:text.value,checked:check.checked,range:range.value,files:file.files.length,top:offscreen.getBoundingClientRect().top})"))
-    assert state["text"] == "x" and state["checked"] and state["range"] == "75" and state["files"] == 1
+        "JSON.stringify({text:text.value,checked:check.checked,range:range.value,files:file.files.length,top:offscreen.getBoundingClientRect().top,offscreenInput:document.querySelector('#offscreen-input').value})"))
+    assert state["text"] == "x" and state["checked"] and state["range"] == "75" and state["files"] == 1 and state["offscreenInput"] == "visible"
     report["checks"].append("file_upload_selector_scroll_drag_and_download_complete")
     report["passed"] = True
 finally:
