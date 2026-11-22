@@ -35,7 +35,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from _nowindow import detached_no_window, hidden_startup_info, no_window  # noqa: E402
-from bluebean_paths import APP_ROOT, DATA_ROOT, DSH_BIN, DSH_EXE  # noqa: E402
+from bluebean_paths import APP_ROOT, DATA_ROOT, DSH_BIN, DSH_EXE, PROFILE_DIR  # noqa: E402
 from bluebean_version import VERSION  # noqa: E402
 from _runtime_state import (DSH_ENVIRONMENT_VERSION, atomic_json, atomic_text,
                            dsh_environment, process_identity, startup_lock)
@@ -101,6 +101,28 @@ def probe(url: str, timeout: float = 1.5) -> tuple[bool, str]:
         return False, f"HTTP {exc.code}"
     except Exception as exc:                                    # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"
+
+
+def bind_overlay(url: str, timeout: float = 2.0) -> dict:
+    """Point the running browser's native assistant panel at the current DSH URL.
+
+    DSH Web uses a one-time authenticated URL. When its process is replaced, the
+    browser keeps the old WebView until the overlay command is sent again.
+    Skip the command before Chrome starts so first-launch latency is unchanged.
+    """
+    if not url:
+        return {"ok": False, "skipped": "no url"}
+    profile = pathlib.Path(PROFILE_DIR)
+    if not (profile / "DevToolsActivePort").exists():
+        return {"ok": False, "skipped": "browser not running"}
+    try:
+        import env_cli
+        reply = env_cli.send(env_cli.resolve_profile_dir(profile),
+                             {"command": "overlay", "on": True, "url": url},
+                             timeout)
+        return reply if isinstance(reply, dict) else {"ok": False, "error": "invalid overlay reply"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def api_key() -> str:
@@ -285,10 +307,19 @@ def ensure() -> dict:
         if owned and compatible and url:
             ok, detail = probe(url)
             if ok:
-                return {"ok": True, "reused": True, **state, "probe": detail}
+                overlay = bind_overlay(url)
+                return {"ok": True, "reused": True, **state, "probe": detail,
+                        "overlay_bound": bool(overlay.get("ok")),
+                        **({} if overlay.get("ok") else {"overlay_error": overlay.get("error") or overlay.get("skipped")})}
         if owned:
             stop()
-        return start()
+        result = start()
+        if result.get("ok"):
+            overlay = bind_overlay(str(result.get("url") or ""))
+            result["overlay_bound"] = bool(overlay.get("ok"))
+            if not overlay.get("ok"):
+                result["overlay_error"] = overlay.get("error") or overlay.get("skipped")
+        return result
 
 
 def main() -> int:
