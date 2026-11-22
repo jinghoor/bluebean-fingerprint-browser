@@ -1238,6 +1238,33 @@ class BrowserBackend:
         return {'ok':True,'element':element_id,'file_name':file_path.name,
                 'file_count':1,'trusted':False,'mode':'browser-file-picker'}
 
+    def download_wait(self, env: str | None, timeout_ms: int = 30000,
+                      wait: bool = True) -> dict:
+        resolved_env = env or self.env_state().get('active', '')
+        folder = DATA_ROOT / 'downloads' / (resolved_env or 'active')
+        folder.mkdir(parents=True, exist_ok=True)
+        before = {item.name for item in folder.iterdir() if item.is_file()}
+        cdp = self._cdp(env)
+        behavior = {'behavior':'allow','downloadPath':str(folder)}
+        reply = cdp.send('Page.setDownloadBehavior', behavior, timeout=5)
+        if reply.get('error'):
+            cdp.send('Browser.setDownloadBehavior', behavior, timeout=5)
+        if not wait:
+            return {'ok':True,'env':resolved_env,'configured':True,
+                    'download_dir':str(folder)}
+        timeout = max(0, min(120000, int(timeout_ms))) / 1000
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            candidates = [item for item in folder.iterdir() if item.is_file() and item.name not in before and not item.name.endswith('.crdownload')]
+            if candidates:
+                chosen = max(candidates, key=lambda item: item.stat().st_mtime)
+                return {'ok':True,'env':resolved_env,'file_name':chosen.name,
+                        'path':str(chosen),'size':chosen.stat().st_size}
+            time.sleep(.1)
+        return {'ok':False,'error_code':'DOWNLOAD_TIMEOUT',
+                'error':'No completed download appeared before the timeout.',
+                'download_dir':str(folder),'timeout_ms':int(timeout_ms)}
+
     def select_options(self, env: str | None, element_id: str,
                        values: Any = None) -> dict:
         """Select one or more native HTML options through trusted keyboard input.

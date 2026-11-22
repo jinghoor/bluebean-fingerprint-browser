@@ -11,6 +11,7 @@
 - Capture JavaScript alert, confirm, and prompt events and expose an explicit dialog action so blocked pages do not receive accidental follow-up input.
 - Observe same-origin iframe and open Shadow DOM controls with context paths, and map nested targets back to top-level trusted click coordinates.
 - Add trusted drag paths for sortable controls, drop zones, and pointer-driven sliders.
+- Add per-environment download waiting with a private download directory and completed-file verification.
 - Keep fixed-insert conversation docks persistent when the user clicks the page or other browser content. Page input continues normally without folding the dock.
 - Keep the DSH sidebar and conversation interactive while the middle browser page remains visible and clickable.
 - Keep DSH full-permission confirmation dialogs fully interactive, including releases that render the checkbox panel without dialog semantics.
