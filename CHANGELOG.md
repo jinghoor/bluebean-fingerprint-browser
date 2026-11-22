@@ -6,6 +6,7 @@
 - Add a right-side conversation dock for “我的环境” with floating and fixed-insert modes.
 - Keep fixed-insert conversation docks persistent when the user clicks the page or other browser content. Page input continues normally without folding the dock.
 - Keep the DSH sidebar and conversation interactive while the middle browser page remains visible and clickable.
+- Keep DSH full-permission confirmation dialogs fully interactive, including releases that render the checkbox panel without dialog semantics.
 - Remove stale loopback DSH authentication cookies during browser startup and refresh the current workbench URL, preventing accumulated `dsh-auth-*` cookies from causing HTTP 431 or an authentication-required screen.
 - Add a native compositor-side Agent pointer for move, click, focus, typing and scrolling. It is isolated per environment and does not modify page content or intercept page input.
 - Show the native pointer for direct Agent navigation as well, before dispatching the real page navigation.

@@ -148,6 +148,12 @@ try:
     initial = wait(lambda: (g if 'collapsed=1' in (g := geometry()) and 'bootstrap=0' in g else None))
     assert measure(initial, 'native_clip')[2] == 280, initial
     report['checks'].append('first_mount_is_sidebar_only')
+    evaluate(panel, "(()=>{const d=document.createElement('div');d.id='permission-dialog-fixture';d.textContent='确认启用完全权限？ 我已了解风险，并愿意继续';Object.assign(d.style,{position:'fixed',left:'40%',top:'40%',width:'420px',height:'180px',zIndex:'2147483647',background:'white',color:'black',display:'block'});document.body.append(d);return true})()")
+    modal = wait(lambda: (g if 'modal=1' in (g := geometry()) else None))
+    assert measure(modal, 'native_clip')[2] > 280, modal
+    evaluate(panel, "document.getElementById('permission-dialog-fixture').remove();true")
+    wait(lambda: 'modal=0' in geometry())
+    report['checks'].append('permission_dialog_keeps_full_dsh_surface_interactive')
     original_page = measure(initial, 'page')
     for cycle in range(8):
         command(command='overlay', mode='rail')

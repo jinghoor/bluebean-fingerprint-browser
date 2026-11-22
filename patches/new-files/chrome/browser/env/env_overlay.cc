@@ -791,6 +791,13 @@ gfx::Rect EnvOverlayHost::DockedConversationBounds() const {
 }
 
 bool EnvOverlayHost::IsInteractivePoint(const gfx::Point& point) const {
+  // First-run and permission dialogs are rendered by the same DSH
+  // WebContents, including in the middle column. Keep the whole surface
+  // interactive while either modal state is visible so the native event
+  // filter cannot send checkbox or approval clicks to the page underneath.
+  if ((bootstrap_visible_ || modal_visible_) && web_view_) {
+    return web_view_->bounds().Contains(point);
+  }
   if (docked_right_ && FullViewportVisible()) {
     return DockedSidebarBounds().Contains(point) ||
            DockedConversationBounds().Contains(point);
@@ -799,6 +806,9 @@ bool EnvOverlayHost::IsInteractivePoint(const gfx::Point& point) const {
 }
 
 bool EnvOverlayHost::IntersectsInteractiveRegion(const gfx::Rect& rect) const {
+  if ((bootstrap_visible_ || modal_visible_) && web_view_) {
+    return web_view_->bounds().Intersects(rect);
+  }
   if (docked_right_ && FullViewportVisible()) {
     return DockedSidebarBounds().Intersects(rect) ||
            DockedConversationBounds().Intersects(rect);
@@ -1073,6 +1083,22 @@ void EnvOverlayHost::ExpandFromRail() {
 }
 
 bool EnvOverlayHost::PressLandedOnLayer(const ui::MouseEvent& event) const {
+  if (GetWidget()) {
+    // A WebContents modal can report the browser frame as the event target
+    // instead of its child native window. Geometry is the reliable source for
+    // checkbox and approval-dialog hit testing in that case.
+    gfx::Point point(event.root_location());
+    // MouseEvent::root_location() is relative to the browser root widget,
+    // while IsInteractivePoint() expects coordinates in this host view.
+    // Convert through the root view instead of treating the root point as a
+    // screen point. This remains correct when the browser window moves or the
+    // display scale changes.
+    views::View::ConvertPointToTarget(GetWidget()->GetRootView(), this,
+                                      &point);
+    if (IsInteractivePoint(point)) {
+      return true;
+    }
+  }
   aura::Window* target = static_cast<aura::Window*>(event.target());
   aura::Window* layer_window =
       (web_view_ && web_view_->holder()) ? web_view_->holder()->native_view() : nullptr;
@@ -1089,6 +1115,9 @@ bool EnvOverlayHost::PressLandedOnLayer(const ui::MouseEvent& event) const {
     // reports the overlay's native window as its target.
     return IsInteractivePoint(point);
   }
+  // Once the native target is inside the overlay, preserve the event for the
+  // embedded DSH page. This includes permission dialogs whose child frame is
+  // not exposed as the original target window.
   return true;
 }
 

@@ -1193,7 +1193,13 @@ window.__ModuleLoader__.load({
         const send = (action) => {
           const width = Math.round(sidebar()?.getBoundingClientRect().width || 280);
           const visible = element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden';
-          const modal = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]')].some(visible);
+          const dialog = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]')];
+          // Some DSH releases render the full-permission confirmation as a
+          // styled panel without dialog semantics. Its visible prompt still
+          // needs the full WebContents hit region so the checkbox reaches DSH.
+          const permissionPrompt = /确认启用完全权限|启用完全权限|full access|enable full permissions/i;
+          const modal = dialog.some(visible) ||
+            permissionPrompt.test(document.body?.innerText || '');
           const shell = !!(sidebar() && document.querySelector('.GAkraW_root'));
           const state = JSON.stringify({action, sidebar_width: width, shell_ready: shell, modal_visible: modal});
           if (action === 'ready' && state === lastState) return;
