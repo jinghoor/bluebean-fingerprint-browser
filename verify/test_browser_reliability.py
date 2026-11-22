@@ -64,7 +64,10 @@ class BackendTests(unittest.TestCase):
         result = self.backend.goto('A', 'https://invalid.example')
         self.assertFalse(result['ok'])
         self.assertTrue(result['navigation_sent'])
-        self.cdp.evaluate.assert_not_called()
+        # The native pointer moves to the viewport anchor before every direct
+        # navigation, including one that the browser rejects immediately.
+        self.cdp.evaluate.assert_called_once_with(
+            'JSON.stringify({x: innerWidth / 2, y: innerHeight / 2})')
 
     def test_explicit_navigation_delay_preserved(self):
         self.cdp.send.return_value = {'result': {'loaderId': 'new'}}
