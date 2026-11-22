@@ -18,6 +18,7 @@
 - Recognize visible div-based dropdown triggers such as `wj-select` and `select-content-wrap`, deduplicate nested visual wrappers, and move the pointer over custom menu items before clicking them.
 - Keep the custom-menu hover settle window at 40 ms after measurement, reducing each cascading level without sacrificing the real Wenjuan dropdown selection.
 - Rebind the native DSH overlay to the new authenticated Web URL after an idle DSH Web restart, preventing the assistant panel from disappearing after a service reload.
+- Make cascading menu selection tolerate an already-open popup and labels with visual prefixes such as `A.` or `2.`, avoiding the trigger toggle and false `MENU_ITEM_NOT_FOUND` retries.
 - Make infinite-canvas actions validate finite coordinates and the selected board, focus the board before keyboard follow-up, use complete double-click cycles for editing, and preserve the zoom anchor while panning and zooming.
 - Add a ten-round graph-editor regression that verifies node selection, connections, disconnections, editing, cancellation, layout-shifted coordinates, panning, anchored zooming, and invalid-input rejection.
 - Keep fixed-insert conversation docks persistent when the user clicks the page or other browser content. Page input continues normally without folding the dock.

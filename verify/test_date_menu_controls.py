@@ -27,7 +27,7 @@ function show(level){const box=document.createElement('div');box.id='menu-'+leve
 category.onclick=()=>{menus.textContent='';show(0)};
 menus.onclick=e=>{const item=e.target.closest('[role=menuitem]');if(!item)return;const level=Number(item.dataset.level);
   if(level+1<levels.length)show(level+1);else result.textContent='selected:'+item.textContent;};
-custom.onclick=()=>{customMenu.innerHTML='<div class="option-item">自定义选项</div><div class="option-item">第二选项</div>';customMenu.style.display='block'};
+custom.onclick=()=>{customMenu.innerHTML='<div class="option-item">A.自定义选项</div><div class="option-item">B.第二选项</div>';customMenu.style.display='block'};
 customMenu.onclick=e=>{const item=e.target.closest('.option-item');if(item)customResult.textContent='custom:'+item.textContent;};
 </script>'''.encode()
 
@@ -90,9 +90,11 @@ try:
     assert controls["#custom"]["role"] == "combobox"
     report["checks"].append("observe_identifies_date_time_input_types")
 
+    backend.act(env_id, controls["#category"]["id"])
     started = time.perf_counter()
     date = backend.set_date_time(env_id, controls["#date"]["id"], "2026-12-25")
     report["timings_ms"]["date"] = round((time.perf_counter() - started) * 1000, 2)
+    backend.act(env_id, controls["#custom"]["id"])
     started = time.perf_counter()
     time_value = backend.set_date_time(env_id, controls["#time"]["id"], "14:30")
     report["timings_ms"]["time"] = round((time.perf_counter() - started) * 1000, 2)
@@ -112,12 +114,12 @@ try:
     started = time.perf_counter()
     custom_menu = backend.menu_select(env_id, controls["#custom"]["id"], ["自定义选项"])
     report["timings_ms"]["custom_menu"] = round((time.perf_counter() - started) * 1000, 2)
-    assert custom_menu["ok"] and custom_menu["path"] == ["自定义选项"]
+    assert custom_menu["ok"] and custom_menu["path"] == ["A.自定义选项"]
     state = json.loads(backend._cdp(env_id).evaluate(
         "JSON.stringify({date:date.value,time:time.value,datetime:datetime.value,result:result.textContent,custom:customResult.textContent})"))
     assert state == {"date": "2026-12-25", "time": "14:30",
                      "datetime": "2026-12-25T14:30", "result": "selected:Gaming",
-                     "custom": "custom:自定义选项"}
+                     "custom": "custom:A.自定义选项"}
     report["checks"].append("four_level_menu_relocates_after_each_click")
     report["checks"].append("custom_div_dropdown_observed_and_selected")
     report["passed"] = True

@@ -1722,31 +1722,39 @@ class BrowserBackend:
                                   shadow_path=trigger.get('shadow_path', []))
             if not check.get('ok'):
                 return check
-        x, y, w, h = trigger['bbox']
-        cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
-        if trigger.get('point'):
-            cx, cy = trigger['point']
-        self.cursor_event(env, cx, cy, 'menu')
-        cdp.send('Input.dispatchMouseEvent', {
-            'type': 'mouseMoved', 'x': cx, 'y': cy, 'button': 'none'})
-        for event_type in ('mousePressed', 'mouseReleased'):
-            cdp.send('Input.dispatchMouseEvent', {
-                'type': event_type, 'x': cx, 'y': cy,
-                'button': 'left', 'clickCount': 1})
-
         matcher = (
-            "(label => { const wanted = label.trim().replace(/\\s+/g, ' ').toLocaleLowerCase();"
+            "(label => { const normalize = value => (value || '').trim().replace(/\\s+/g, ' ').toLocaleLowerCase();"
+            " const wanted = normalize(label);"
+            " const key = value => normalize(value).replace(/^[a-z][.)、．]\\s*/i, '').replace(/^\\d+[.)、．]\\s*/, '');"
             " const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);"
             " return r.width >= 4 && r.height >= 4 && r.bottom > 0 && r.right > 0 &&"
             " r.top < innerHeight && r.left < innerWidth && s.visibility !== 'hidden' &&"
             " s.display !== 'none' && s.pointerEvents !== 'none'; };"
             " const nodes = [...document.querySelectorAll('[role=menuitem],[role=option],[role=treeitem],"
             "[data-menu-item],[data-option],[class*=" + json.dumps('cascader-node') + "],[class*=" + json.dumps('menu-item') + "],[class*=" + json.dumps('option') + "],li,[role=gridcell],button,a')].filter(visible);"
-            " const exact = nodes.filter(el => (el.innerText || el.textContent || '').trim()"
-            ".replace(/\\s+/g, ' ').toLocaleLowerCase() === wanted);"
-            " const el = exact[exact.length - 1]; if (!el) return null; const r = el.getBoundingClientRect();"
+            " const text = el => (el.innerText || el.textContent || '').trim();"
+            " const exact = nodes.filter(el => normalize(text(el)) === wanted);"
+            " const relaxed = nodes.filter(el => { const candidate = key(text(el)); const target = key(wanted);"
+            " return candidate === target || candidate.endsWith(target) || target.endsWith(candidate); });"
+            " const matches = exact.length ? exact : relaxed;"
+            " const el = matches[matches.length - 1]; if (!el) return null; const r = el.getBoundingClientRect();"
             " return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2,label:(el.innerText||el.textContent||'').trim(),"
             "expanded:el.getAttribute('aria-expanded')}); })")
+        # The menu may already be open because the Agent observed it or a
+        # previous click left it expanded. Do not toggle the trigger closed.
+        first_raw = cdp.evaluate(matcher + "(" + json.dumps(path[0]) + ")", timeout=5)
+        if not json.loads(first_raw or 'null'):
+            x, y, w, h = trigger['bbox']
+            cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
+            if trigger.get('point'):
+                cx, cy = trigger['point']
+            self.cursor_event(env, cx, cy, 'menu')
+            cdp.send('Input.dispatchMouseEvent', {
+                'type': 'mouseMoved', 'x': cx, 'y': cy, 'button': 'none'})
+            for event_type in ('mousePressed', 'mouseReleased'):
+                cdp.send('Input.dispatchMouseEvent', {
+                    'type': event_type, 'x': cx, 'y': cy,
+                    'button': 'left', 'clickCount': 1})
         timeout = max(1000, min(30000, int(timeout_ms))) / 1000
         chosen = []
         for label in path:
@@ -1769,7 +1777,7 @@ class BrowserBackend:
                 'type': 'mouseMoved', 'x': state['x'], 'y': state['y'], 'button': 'none'})
             # Give custom popup components one paint opportunity to promote the
             # hovered item before the trusted press/release pair.
-            time.sleep(0.03)
+            time.sleep(0.04)
             for event_type in ('mousePressed', 'mouseReleased'):
                 cdp.send('Input.dispatchMouseEvent', {
                     'type': event_type, 'x': state['x'], 'y': state['y'],
