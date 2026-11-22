@@ -334,7 +334,7 @@ class Bridge:
         changed = None
         snapshot_warning = None
         # Mutating steps answer "what happened" without a second round trip from the agent.
-        if name in ("act", "type", "clear", "key", "select", "check", "range", "drag", "canvas", "date_time", "menu_select", "scroll_into_view", "upload_file", "download_wait", "clipboard", "goto", "new_tab", "switch_tab", "close_tab", "dialog") and result.get('ok') is not False:
+        if name in ("act", "type", "clear", "key", "select", "check", "range", "drag", "canvas", "date_time", "menu_select", "scroll_into_view", "upload_file", "download_wait", "clipboard", "goto", "new_tab", "switch_tab", "close_tab", "dialog", "scroll") and result.get('ok') is not False:
             key = env or ""
             before = self.snapshots.get(key, {})
             try:

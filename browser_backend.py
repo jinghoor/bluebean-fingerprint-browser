@@ -653,15 +653,76 @@ class BrowserBackend:
             selector = condition['selector']
             frames = json.dumps(condition.get('frame_path', []), ensure_ascii=False)
             shadows = json.dumps(condition.get('shadow_path', []), ensure_ascii=False)
-            self._cdp(env).evaluate(
+            scroll_result = self._cdp(env).evaluate(
                 "(() => { let root=document; for (const s of " + frames + ") {"
                 "const frame=root.querySelector(s); root=frame&&frame.contentDocument; if(!root)return false; }"
                 "for (const s of " + shadows + ") { const host=root.querySelector(s); root=host&&host.shadowRoot; if(!root)return false; }"
                 "const el=root.querySelector(" + json.dumps(selector) + "); if(!el)return false;"
-                "const r=el.getBoundingClientRect(); if(r.top<0||r.bottom>innerHeight||r.left<0||r.right>innerWidth)"
-                "el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}); return true; })()",
+                "const r=el.getBoundingClientRect(); let needs=r.top<0||r.bottom>innerHeight||r.left<0||r.right>innerWidth;"
+                "for(let p=el.parentElement;p;p=p.parentElement){const s=getComputedStyle(p);"
+                "if(/(auto|scroll|overlay)/.test(s.overflow+s.overflowX+s.overflowY)){"
+                "const pr=p.getBoundingClientRect(); if(r.top<pr.top||r.bottom>pr.bottom||r.left<pr.left||r.right>pr.right) needs=true;}}"
+                "if(needs) el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}); return needs; })()",
                 timeout=5)
-        return wait_for_page(self._cdp(env), condition)
+            if scroll_result:
+                # Virtualized controls may be replaced by the scroll handler.
+                # Let the new row mount before the readiness probe resolves its
+                # selector and identity.
+                self._wait_for_render(self._cdp(env))
+        cdp = self._cdp(env)
+        result = wait_for_page(cdp, condition)
+        # A virtualizer can replace a row while preserving its unique
+        # selector. In that case the geometry/identity sample belongs to the
+        # detached node, while the selector still safely names the same field.
+        # Re-probe once without the detached-node identity after our own
+        # scroll, but never bypass a document/navigation change.
+        if (auto_scroll and result.get('error_code') == 'STALE_OBSERVATION' and
+                result.get('state', {}).get('stale_target') and condition.get('selector')):
+            retry_condition = dict(condition)
+            retry_condition.pop('identity', None)
+            retry = wait_for_page(cdp, retry_condition)
+            if retry.get('ok'):
+                retry['recovered_virtual_target'] = True
+            return retry
+        return result
+
+    @staticmethod
+    def _wait_for_render(cdp: Cdp, max_ms: int = 180) -> dict:
+        """Wait for a short quiet window after a scroll or virtual-list update."""
+        script = r"""
+new Promise(resolve => {
+  const started = performance.now();
+  const limit = __LIMIT__;
+  const minimum = 70;
+  let frames = 0, stable = 0, last = '', lastMutation = started;
+  let observer;
+  const finish = () => {
+    if (observer) observer.disconnect();
+    resolve(JSON.stringify({frames, stable, elapsed_ms: Math.round(performance.now() - started)}));
+  };
+  observer = new MutationObserver(() => { lastMutation = performance.now(); stable = 0; });
+  try { observer.observe(document, {subtree:true, childList:true}); } catch (_) {}
+  const timer = setTimeout(finish, limit);
+  const tick = () => {
+    const root = document.documentElement, body = document.body;
+    const signature = [
+      Math.round(scrollX), Math.round(scrollY),
+      root ? root.scrollHeight : 0, body ? body.scrollHeight : 0,
+      document.querySelectorAll('input,select,textarea,button,[role=option],[role=radio],[role=checkbox]').length
+    ].join(':');
+    stable = signature === last && performance.now() - lastMutation >= 24 ? stable + 1 : 0;
+    last = signature; frames += 1;
+    if (stable >= 2 && performance.now() - started >= minimum) { clearTimeout(timer); finish(); return; }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})"""
+        script = script.replace('__LIMIT__', str(max(70, int(max_ms))))
+        raw = cdp.evaluate(script, timeout=max(2, max_ms / 1000 + 1), await_promise=True)
+        try:
+            return json.loads(raw or '{}') if raw else {}
+        except (TypeError, ValueError):
+            return {}
 
     # ------------------------------------------------------------------- actions
 
@@ -1979,7 +2040,24 @@ class BrowserBackend:
         cdp.send("Input.dispatchMouseEvent", {
             "type": "mouseWheel", "x": x, "y": y,
             "deltaX": float(delta_x), "deltaY": float(delta_y)})
-        return {"at": [x, y], "delta_x": delta_x, "delta_y": delta_y}
+        # Virtualized lists often replace their rows in the scroll handler. Two
+        # animation frames let that replacement and its layout settle before
+        # we publish element ids. This keeps the next Agent action from using
+        # an id from the previous viewport.
+        settled = self._wait_for_render(cdp)
+        result = {"at": [x, y], "delta_x": delta_x, "delta_y": delta_y,
+                  "observe_after_scroll": True,
+                  "next_action": "observe before using ids from the newly visible area"}
+        if settled:
+            result["render_settled"] = settled
+        # Return a fresh observation with the scroll result. The Agent can use
+        # its ids immediately, while callers that prefer an explicit observe
+        # still get the same stable behavior.
+        try:
+            result["observation"] = self.observe(env, limit=80)
+        except Exception as exc:
+            result["observation_error"] = str(exc)[:160]
+        return result
 
     def read(self, env: str | None, selector: str = "body",
              limit: int = 2000) -> dict:
