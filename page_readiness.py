@@ -28,12 +28,31 @@ PROBE_JS = r"""
     const matched = state === 'complete' ? result.load_complete : result.dom_ready;
     return {...result, matched, reason: matched ? 'condition_met' : 'document_loading'};
   }
+  let root = document, originX = 0, originY = 0;
+  try {
+    for (const frameSelector of (condition.frame_path || [])) {
+      const frame = root.querySelector(frameSelector);
+      if (frame) { const frameBox = frame.getBoundingClientRect(); originX += frameBox.left; originY += frameBox.top; }
+      root = frame && frame.contentDocument;
+      if (!root) return {...result, reason:'frame_unavailable'};
+    }
+    for (const shadowSelector of (condition.shadow_path || [])) {
+      const host = root.querySelector(shadowSelector);
+      root = host && host.shadowRoot;
+      if (!root) return {...result, reason:'shadow_root_unavailable'};
+    }
+  } catch { return {...result, invalid_selector: true, reason:'invalid_context_selector'}; }
   let el = null;
-  try { el = document.querySelector(condition.selector || 'body'); }
+  try { el = root.querySelector(condition.selector || 'body'); }
   catch { return {...result, invalid_selector: true, reason: 'invalid_selector'}; }
   let visible = false, enabled = false, hit = false, box = null, point = null;
   if (el) {
-    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    const local = el.getBoundingClientRect();
+    const r = {x:local.x + originX, y:local.y + originY,
+      left:local.left + originX, top:local.top + originY,
+      right:local.right + originX, bottom:local.bottom + originY,
+      width:local.width, height:local.height};
+    const cs = getComputedStyle(el);
     const clipped = {left: Math.max(0,r.left), top: Math.max(0,r.top),
       right: Math.min(innerWidth,r.right), bottom: Math.min(innerHeight,r.bottom)};
     visible = el.isConnected && r.width > 0 && r.height > 0 && cs.visibility === 'visible' &&
@@ -45,7 +64,7 @@ PROBE_JS = r"""
       (el.matches('textarea') || el.isContentEditable || el.tagName === 'INPUT' &&
         ['text','search','url','tel','email','password','number'].includes(el.type));
     const x = (clipped.left+clipped.right)/2, y = (clipped.top+clipped.bottom)/2;
-    const top = visible ? document.elementFromPoint(x,y) : null;
+    const top = visible ? (root === document ? document.elementFromPoint(x,y) : root.elementFromPoint(x-originX,y-originY)) : null;
     hit = !!top && (top === el || el.contains(top)) && cs.pointerEvents !== 'none';
     point = [x,y];
     box = [r.x,r.y,r.width,r.height].map(v => Math.round(v*2)/2);
@@ -73,7 +92,7 @@ PROBE_JS = r"""
 
 def wait_for(cdp, condition: dict) -> dict:
     allowed = {'selector', 'text', 'url', 'state', 'timeout_ms', 'stable_ms',
-               'document_token', 'identity', 'editable'}
+               'document_token', 'identity', 'editable', 'frame_path', 'shadow_path'}
     if not isinstance(condition, dict) or set(condition) - allowed:
         raise ValueError('unsupported page wait condition')
     condition = dict(condition)
@@ -85,6 +104,11 @@ def wait_for(cdp, condition: dict) -> dict:
     for key, limit in (('selector',2048), ('text',2000), ('url',4096), ('document_token',100)):
         if key in condition and (not isinstance(condition[key], str) or not condition[key] or len(condition[key]) > limit):
             raise ValueError(f'invalid {key} in page wait')
+    for key in ('frame_path', 'shadow_path'):
+        if key in condition and (not isinstance(condition[key], list) or
+                                 any(not isinstance(item, str) or not item or len(item) > 2048
+                                     for item in condition[key])):
+            raise ValueError(f'{key} must be an array of CSS selectors')
     for key, default, maximum in (('timeout_ms',10000,30000), ('stable_ms',100 if state == 'actionable' else 0,1000)):
         value = condition.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int,float)) or not math.isfinite(value) or not 0 <= value <= maximum:

@@ -472,103 +472,88 @@ class BrowserBackend:
     # --------------------------------------------------------------- observations
     OBSERVE_JS = r"""
 (() => {
-  const out = [];
-  const idCounts = new Map(), siblingGroups = new WeakMap();
-  function locator(el) {
+  const out = [], names = [], idCounts = new Map(), siblingGroups = new WeakMap();
+  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup]';
+  const sel = summarySelector + ',[onclick]';
+  let count = 0, fingerprint = 0, id = 0;
+  function locator(el, root) {
+    if (el.id) {
+      try { if (root.querySelectorAll('#' + CSS.escape(el.id)).length === 1) return '#' + CSS.escape(el.id); } catch (_) {}
+    }
     const path = [];
-    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
-      if (node.id && !idCounts.has(node.id))
-        idCounts.set(node.id,document.querySelectorAll('#'+CSS.escape(node.id)).length);
-      if (node.id && idCounts.get(node.id) === 1) {
-        path.unshift('#'+CSS.escape(node.id)); break;
-      }
-      const tag = node.tagName.toLowerCase();
+    for (let node = el; node && node.nodeType === 1 && node !== root; node = node.parentElement) {
       const parent = node.parentElement;
       if (parent && !siblingGroups.has(parent)) {
         const groups = new Map();
         for (const child of parent.children) {
-          if (!groups.has(child.tagName)) groups.set(child.tagName,[]);
+          if (!groups.has(child.tagName)) groups.set(child.tagName, []);
           groups.get(child.tagName).push(child);
         }
-        siblingGroups.set(parent,groups);
+        siblingGroups.set(parent, groups);
       }
       const siblings = parent ? siblingGroups.get(parent).get(node.tagName) : [node];
-      path.unshift(tag+':nth-of-type('+(siblings.indexOf(node)+1)+')');
+      path.unshift(node.tagName.toLowerCase() + ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')');
     }
     return path.join(' > ');
   }
-  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup]';
-  const sel = summarySelector + ',[onclick]';
-  const names = [];
-  let count = 0, fingerprint = 0;
-  let id = 0;
-  for (const el of document.querySelectorAll(sel)) {
-    // Reuse text collected for the baseline instead of scanning the page twice.
-    const rawLabel = el.getAttribute('aria-label') || el.getAttribute('name') ||
-      el.getAttribute('placeholder') || el.innerText ||
-      (el.matches('input,textarea') ? '' : el.value) || '';
-    const label = rawLabel.trim().replace(/\s+/g,' ');
-    if (el.matches(summarySelector)) {
-      const text = label.slice(0,40);
-      count++;
-      for (let i=0;i<text.length;i++) fingerprint=(fingerprint*31+text.charCodeAt(i))>>>0;
-      if (names.length<40) names.push(text);
+  function visit(root, framePath, shadowPath, originX, originY) {
+    if (!root || out.length >= 120) return;
+    let nodes = [];
+    try { nodes = Array.from(root.querySelectorAll(sel)); } catch (_) { return; }
+    for (const el of nodes) {
+      const rawLabel = el.getAttribute('aria-label') || el.getAttribute('name') ||
+        el.getAttribute('placeholder') || el.innerText ||
+        (el.matches('input,textarea') ? '' : el.value) || '';
+      const label = rawLabel.trim().replace(/\s+/g, ' ');
+      if (el.matches(summarySelector)) {
+        const text = label.slice(0, 40);
+        count++;
+        for (let i = 0; i < text.length; i++) fingerprint = (fingerprint * 31 + text.charCodeAt(i)) >>> 0;
+        if (names.length < 40) names.push(text);
+      }
+      if (out.length >= 120) break;
+      const r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) continue;
+      const cs = getComputedStyle(el);
+      const x = r.left + originX, y = r.top + originY;
+      const clipped = {left: Math.max(0, x), top: Math.max(0, y), right: Math.min(innerWidth, x + r.width), bottom: Math.min(innerHeight, y + r.height)};
+      const visible = cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0 &&
+        clipped.right > clipped.left && clipped.bottom > clipped.top &&
+        (!el.checkVisibility || el.checkVisibility({checkOpacity:true, checkVisibilityCSS:true}));
+      if (!visible) continue;
+      const cx = (clipped.left + clipped.right) / 2, cy = (clipped.top + clipped.bottom) / 2;
+      const hit = root === document && document.elementFromPoint(cx, cy);
+      const name = (rawLabel || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      const selectState = el.tagName === 'SELECT' ? {
+        multiple: el.multiple,
+        selected_values: Array.from(el.selectedOptions).map(option => option.value),
+        options: Array.from(el.options).slice(0, 120).map(option => ({value: option.value, label: (option.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120), selected: option.selected, disabled: option.disabled}))
+      } : {};
+      const inputState = el.matches('input[type=checkbox],input[type=radio]') ? {checked: el.checked, value: el.value || ''} : {};
+      const menuState = {input_type: el.getAttribute('type'), aria_haspopup: el.getAttribute('aria-haspopup'), aria_expanded: el.getAttribute('aria-expanded'), aria_selected: el.getAttribute('aria-selected'), aria_current: el.getAttribute('aria-current'), aria_level: el.getAttribute('aria-level'), menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null};
+      out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport: clipped.right > clipped.left && clipped.bottom > clipped.top, clickable:cs.pointerEvents !== 'none', occluded: root === document ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...menuState});
     }
-    if (out.length >= 120) continue;
-    const r = el.getBoundingClientRect();
-    if (r.width < 4 || r.height < 4) continue;
-    const cs = getComputedStyle(el);
-    if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') continue;
-    if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) continue;
-    const cx = Math.min(innerWidth - 1, Math.max(0, r.left + r.width / 2));
-    const cy = Math.min(innerHeight - 1, Math.max(0, r.top + r.height / 2));
-    const hit = document.elementFromPoint(cx, cy);
-    const name = (rawLabel || el.getAttribute('title') || '').trim().replace(/\s+/g,' ').slice(0,60);
-    const selectState = el.tagName === 'SELECT' ? {
-      multiple: el.multiple,
-      selected_values: Array.from(el.selectedOptions).map(option => option.value),
-      options: Array.from(el.options).slice(0, 120).map(option => ({
-        value: option.value,
-        label: (option.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120),
-        selected: option.selected,
-        disabled: option.disabled,
-      })),
-    } : {};
-    const inputState = el.matches('input[type=checkbox],input[type=radio]')
-      ? {checked: el.checked, value: el.value || ''} : {};
-    const menuState = {
-      input_type: el.getAttribute('type'),
-      aria_haspopup: el.getAttribute('aria-haspopup'),
-      aria_expanded: el.getAttribute('aria-expanded'),
-      aria_selected: el.getAttribute('aria-selected'),
-      aria_current: el.getAttribute('aria-current'),
-      aria_level: el.getAttribute('aria-level'),
-      menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null,
-    };
-    out.push({
-      id: 'e' + (id++),
-      tag: el.tagName.toLowerCase(),
-      role: el.getAttribute('role') ||
-            (el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''),
-      name,
-      href: (el.getAttribute('href') || '').slice(0, 80),
-      bbox: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
-      clickable: cs.pointerEvents !== 'none',
-      occluded: !(hit === el || el.contains(hit) || (hit && hit.contains(el))),
-      disabled: el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'),
-      visual_only: false,
-      selector: locator(el),
-      value: 'value' in el ? String(el.value ?? '') : '',
-      ...selectState,
-      ...inputState,
-      ...menuState,
-    });
+    if (out.length >= 120) return;
+    let frames = [];
+    try { frames = Array.from(root.querySelectorAll('iframe,frame')); } catch (_) {}
+    for (const frame of frames) {
+      if (out.length >= 120) break;
+      try {
+        const child = frame.contentDocument;
+        if (!child) continue;
+        const r = frame.getBoundingClientRect();
+        visit(child, framePath.concat(locator(frame,root)), shadowPath, originX + r.left, originY + r.top);
+      } catch (_) {}
+    }
+    let hosts = [];
+    try { hosts = Array.from(root.querySelectorAll('*')).filter(el => el.shadowRoot).slice(0, 40); } catch (_) {}
+    for (const host of hosts) {
+      if (out.length >= 120) break;
+      try { visit(host.shadowRoot, framePath, shadowPath.concat(locator(host,root)), originX, originY); } catch (_) {}
+    }
   }
-  return JSON.stringify({url: location.href, title: document.title,
-                         ready: document.readyState, document_token: String(performance.timeOrigin),
-                         viewport: [innerWidth, innerHeight],
-                         dpr: devicePixelRatio, elements: out,
-                         _snapshot: {url:location.href,title:document.title,count,fingerprint,names,ready:document.readyState}});
+  visit(document, [], [], 0, 0);
+  return JSON.stringify({url:location.href,title:document.title,ready:document.readyState,document_token:String(performance.timeOrigin),viewport:[innerWidth,innerHeight],dpr:devicePixelRatio,elements:out,_snapshot:{url:location.href,title:document.title,count,fingerprint,names,ready:document.readyState}});
 })()
 """
 
@@ -922,7 +907,8 @@ class BrowserBackend:
         if item.get('selector') and observation.document_token:
             check = self.wait_for(env, selector=item['selector'], document_token=observation.document_token,
                 identity={key:item.get(key,'') for key in ('tag','name','href')},
-                state='actionable', timeout_ms=2000)
+                state='actionable', timeout_ms=2000,
+                frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
             if not check.get('ok'):
                 return check
             item = {**item, 'bbox':check['state']['box'], 'point':check['state'].get('point')}
@@ -1013,11 +999,23 @@ class BrowserBackend:
         if item.get('selector') and observation.document_token:
             check = self.wait_for(env, selector=item['selector'], document_token=observation.document_token,
                 identity={key:item.get(key,'') for key in ('tag','name','href')},
-                state='actionable', editable=editable, timeout_ms=2000)
+                state='actionable', editable=editable, timeout_ms=2000,
+                frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
             if not check.get('ok'):
                 return check
             item = {**item, 'bbox':check['state']['box'], 'point':check['state'].get('point')}
         return item, self._cdp(env)
+
+    @staticmethod
+    def _resolve_element_expression(selector: str, item: dict, body: str) -> str:
+        frames = json.dumps(item.get('frame_path', []), ensure_ascii=False)
+        shadows = json.dumps(item.get('shadow_path', []), ensure_ascii=False)
+        return ("(() => { let root=document; for (const s of " + frames + ") {"
+                "const frame=root && root.querySelector(s); root=frame && frame.contentDocument;"
+                "if(!root) return null; } for (const s of " + shadows + ") {"
+                "const host=root && root.querySelector(s); root=host && host.shadowRoot;"
+                "if(!root) return null; } const el=root.querySelector(" + json.dumps(selector) + ");"
+                "if(!el) return null; " + body + " })()")
 
     def type_text(self, env: str | None, element_id: str, text: str,
                   replace: bool = False) -> dict:
@@ -1101,8 +1099,8 @@ class BrowserBackend:
         if result.get('ok') is False:
             return result
         cdp = self._cdp(env)
-        state = cdp.evaluate("JSON.stringify((() => { const el=document.querySelector(" +
-            json.dumps(item['selector']) + "); return {checked:!!el.checked}; })())", timeout=5)
+        state = cdp.evaluate(self._resolve_element_expression(
+            item['selector'], item, "return JSON.stringify({checked:!!el.checked});"), timeout=5)
         value = json.loads(state or '{}').get('checked')
         if value != bool(checked):
             return {'ok':False,'action_sent':True,'error_code':'CHECK_STATE_NOT_APPLIED',
@@ -1130,9 +1128,9 @@ class BrowserBackend:
                     'error':'range.value must be a number.'}
         selector = item.get('selector')
         cdp = self._cdp(env)
-        state = cdp.evaluate("JSON.stringify((() => { const el=document.querySelector(" +
-            json.dumps(selector) + "); if(!el || el.type!=='range') return {}; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(el,String(" +
-            json.dumps(value) + ")); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return {value:el.value,min:el.min,max:el.max,step:el.step}; })())", timeout=5)
+        state = cdp.evaluate(self._resolve_element_expression(
+            selector, item, "if(el.type!=='range') return {}; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(el,String(" +
+            json.dumps(value) + ")); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return JSON.stringify({value:el.value,min:el.min,max:el.max,step:el.step});"), timeout=5)
         result = json.loads(state or '{}') if state else {}
         if result.get('value') is None or result.get('value') == '':
             return {'ok':False,'action_sent':True,'error_code':'RANGE_NOT_APPLIED',
@@ -1247,16 +1245,12 @@ class BrowserBackend:
         if observation.document_token:
             check = self.wait_for(env, selector=selector,
                                   document_token=observation.document_token,
-                                  state='actionable', timeout_ms=2000)
+                                  state='actionable', timeout_ms=2000,
+                                  frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
             if not check.get('ok'):
                 return check
-        raw = cdp.evaluate(
-            "(() => { const el = document.querySelector(" + json.dumps(selector) +
-            "); if (!el || el.tagName !== 'SELECT') return ''; return JSON.stringify({"
-            "multiple: el.multiple, options: Array.from(el.options).map(o => ({"
-            "value: o.value, label: (o.textContent || '').trim().replace(/\\s+/g, ' '),"
-            "disabled: o.disabled})), selected: Array.from(el.selectedOptions).map(o => o.value)}) })()",
-            timeout=5)
+        raw = cdp.evaluate(self._resolve_element_expression(
+            selector, item, "if(el.tagName !== 'SELECT') return ''; return JSON.stringify({multiple: el.multiple, options: Array.from(el.options).map(o => ({value:o.value,label:(o.textContent||'').trim().replace(/\\s+/g,' '),disabled:o.disabled})), selected:Array.from(el.selectedOptions).map(o=>o.value)});"), timeout=5)
         state = json.loads(raw or '{}') if raw else {}
         options = state.get('options') or []
         if not options:
@@ -1333,10 +1327,8 @@ class BrowserBackend:
         selected = []
         deadline = time.monotonic() + 0.5
         while time.monotonic() < deadline:
-            selected_raw = cdp.evaluate(
-                "JSON.stringify(Array.from(document.querySelector(" + json.dumps(selector) +
-                ").selectedOptions).map(o => ({value:o.value,label:(o.textContent || '').trim()})))",
-                timeout=5)
+            selected_raw = cdp.evaluate(self._resolve_element_expression(
+                selector, item, "return JSON.stringify(Array.from(el.selectedOptions).map(o=>({value:o.value,label:(o.textContent||'').trim()})));"), timeout=5)
             selected = json.loads(selected_raw or '[]') if selected_raw else []
             if [option.get('value', '') for option in selected] == expected_values:
                 break
@@ -1350,14 +1342,14 @@ class BrowserBackend:
             # HTMLSelectElement state and dispatch the standard form events as
             # a deterministic fallback for React and other controlled forms.
             fallback = (
-                "(() => { const el = document.querySelector(" + json.dumps(selector) +
-                "); if (!el || el.tagName !== 'SELECT') return ''; const wanted = new Set(" +
+                "const wanted = new Set(" +
                 json.dumps(expected_values) + "); Array.from(el.options).forEach(o => {"
                 "o.selected = wanted.has(o.value) && !o.disabled; });"
                 "el.dispatchEvent(new Event('input', {bubbles:true}));"
                 "el.dispatchEvent(new Event('change', {bubbles:true}));"
                 "return JSON.stringify(Array.from(el.selectedOptions).map(o => ({"
-                "value:o.value,label:(o.textContent || '').trim()}))); })()")
+                "value:o.value,label:(o.textContent || '').trim()})));" )
+            fallback = self._resolve_element_expression(selector, item, fallback)
             selected_raw = cdp.evaluate(fallback, timeout=5)
             selected = json.loads(selected_raw or '[]') if selected_raw else []
             mode = 'dom-events'
@@ -1408,7 +1400,8 @@ class BrowserBackend:
         if observation.document_token:
             check = self.wait_for(env, selector=selector,
                                   document_token=observation.document_token,
-                                  state='actionable', timeout_ms=2000)
+                                  state='actionable', timeout_ms=2000,
+                                  frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
             if not check.get('ok'):
                 return check
         x, y, w, h = item['bbox']
@@ -1421,15 +1414,14 @@ class BrowserBackend:
                 'type': event_type, 'x': cx, 'y': cy,
                 'button': 'left', 'clickCount': 1})
         script = (
-            "(() => { const el = document.querySelector(" + json.dumps(selector) +
-            "); if (!el || el.tagName !== 'INPUT' || el.type !== " +
-            json.dumps(input_type) + ") return ''; const setter = "
+            "if (el.tagName !== 'INPUT' || el.type !== " + json.dumps(input_type) + ") return ''; const setter = "
             "Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;"
             "setter.call(el, " + json.dumps(value) + ");"
             "el.dispatchEvent(new Event('input', {bubbles:true}));"
             "el.dispatchEvent(new Event('change', {bubbles:true}));"
             "el.blur(); return JSON.stringify({value:el.value,valid:el.value === " +
-            json.dumps(value) + "}); })()")
+            json.dumps(value) + "});")
+        script = self._resolve_element_expression(selector, item, script)
         raw = cdp.evaluate(script, timeout=5)
         state = json.loads(raw or '{}') if raw else {}
         if state.get('value') != value:
