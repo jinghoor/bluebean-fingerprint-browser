@@ -23,6 +23,7 @@ class CursorEventTest(unittest.TestCase):
                 return {"ok": True}
 
             backend.kernel_task = fake_kernel
+            backend.kernel_available = lambda: True
             self.assertTrue(backend.cursor_event("env-1", 12.5, 44.0, "click"))
             self.assertEqual(calls, [("env-1", [],
                                       {"x": 12.5, "y": 44.0, "action": "click"})])
@@ -33,6 +34,18 @@ class CursorEventTest(unittest.TestCase):
             root = Path(directory)
             backend.KERNEL_PORT_FILE = root / "missing-port"
             backend.KERNEL_TOKEN_FILE = root / "missing-token"
+            self.assertFalse(backend.cursor_event("env-1", 1, 2))
+
+    def test_cursor_event_skips_stale_native_channel(self):
+        backend = BrowserBackend()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backend.KERNEL_PORT_FILE = root / "port"
+            backend.KERNEL_TOKEN_FILE = root / "token"
+            backend.KERNEL_PORT_FILE.write_text("1234", encoding="utf-8")
+            backend.KERNEL_TOKEN_FILE.write_text("test", encoding="utf-8")
+            backend.kernel_available = lambda: False
+            backend.kernel_task = lambda *args, **kwargs: self.fail("stale port must not be retried")
             self.assertFalse(backend.cursor_event("env-1", 1, 2))
 
 

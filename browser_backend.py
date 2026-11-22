@@ -687,12 +687,17 @@ class BrowserBackend:
         """Send a best-effort native cursor event without touching the page."""
         if not (self.KERNEL_PORT_FILE.exists() and self.KERNEL_TOKEN_FILE.exists()):
             return False
+        # A stale port file is common after an abnormal browser exit. Probe once
+        # per cache window instead of waiting 1.5s for every Agent action.
+        if not self.kernel_available():
+            return False
         try:
             reply = self.kernel_task(env, [], timeout=1.5,
                                      cursor={"x": float(x), "y": float(y),
                                              "action": action})
             return bool(reply.get("ok", True))
         except Exception:
+            self._kernel_probe = (time.monotonic(), False)
             return False
 
     def click_selectors(self, env: str | None, selectors: list[str],
