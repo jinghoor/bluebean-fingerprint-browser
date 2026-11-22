@@ -49,8 +49,11 @@ DEFAULT_PERMISSIONS = {
     "preset": "full",
     "envs": "any",
     "browser": {"read": "allow", "navigate": "allow", "click": "allow",
-                "type": "allow", "select": "allow", "date_time": "allow",
-                "menu_select": "allow", "env_activate": "allow", "shot": "allow"},
+                "type": "allow", "clear": "allow", "key": "allow",
+                "select": "allow", "check": "allow", "range": "allow",
+                "date_time": "allow", "menu_select": "allow",
+                "scroll_into_view": "allow", "upload_file": "allow",
+                "env_activate": "allow", "shot": "allow"},
     "max_parallel": 4,
     "audit": True,
     "kill_switch": False,
@@ -69,7 +72,8 @@ def load_token(port_hint: int) -> tuple[int, str]:
 
 
 
-MUTATING_STEPS = {"act", "type", "select", "date_time", "menu_select",
+MUTATING_STEPS = {"act", "type", "clear", "key", "select", "check", "range",
+                  "date_time", "menu_select", "scroll_into_view", "upload_file",
                   "goto", "clicks", "batch", "scroll"}
 
 
@@ -236,15 +240,27 @@ class Bridge:
         elif name == "act":
             result = self.backend.act(env, args["id"], args.get("action", "click"))
         elif name == "type":
-            result = self.backend.type_text(env, args["id"], args.get("text", ""))
+            result = self.backend.type_text(env, args["id"], args.get("text", ""), bool(args.get("replace", False)))
+        elif name == "clear":
+            result = self.backend.clear_text(env, args["id"])
+        elif name == "key":
+            result = self.backend.send_keys(env, args.get("id"), args.get("keys") or [])
         elif name == "select":
             result = self.backend.select_options(
                 env, args["id"], args.get("values", args.get("value")))
+        elif name == "check":
+            result = self.backend.set_checked(env, args["id"], bool(args.get("checked", True)))
+        elif name == "range":
+            result = self.backend.set_range(env, args["id"], args.get("value"))
         elif name == "date_time":
             result = self.backend.set_date_time(env, args["id"], args.get("value", ""))
         elif name == "menu_select":
             result = self.backend.menu_select(
                 env, args["id"], args.get("path") or [], args.get("timeout_ms", 10000))
+        elif name == "scroll_into_view":
+            result = self.backend.scroll_into_view(env, args.get("id"), args.get("selector"))
+        elif name == "upload_file":
+            result = self.backend.upload_file(env, args["id"], args["path"])
         elif name == "goto":
             result = self.backend.goto(env, args["url"], int(args["wait_ms"]) if "wait_ms" in args else None)
         elif name == "clicks":
@@ -285,7 +301,7 @@ class Bridge:
         changed = None
         snapshot_warning = None
         # Mutating steps answer "what happened" without a second round trip from the agent.
-        if name in ("act", "type", "select", "date_time", "menu_select", "goto") and result.get('ok') is not False:
+        if name in ("act", "type", "clear", "key", "select", "check", "range", "date_time", "menu_select", "scroll_into_view", "upload_file", "goto") and result.get('ok') is not False:
             key = env or ""
             before = self.snapshots.get(key, {})
             try:
@@ -344,7 +360,8 @@ class Bridge:
             return {"ok": False, "error": "no steps"}
         if not isinstance(steps, list) or any(not isinstance(step, dict) or len(step) != 1 for step in steps):
             return {"ok": False, "error": "steps must be an array of single-action objects"}
-        supported = {'observe', 'act', 'type', 'select', 'date_time', 'menu_select',
+        supported = {'observe', 'act', 'type', 'clear', 'key', 'select', 'check', 'range',
+                     'date_time', 'menu_select', 'scroll_into_view', 'upload_file',
                      'goto', 'clicks', 'batch', 'scroll', 'read', 'shot', 'wait', 'wait_for', 'env'}
         for step in steps:
             name, args = next(iter(step.items()))
@@ -782,7 +799,7 @@ def make_handler(bridge: Bridge, token: str):
                             "environment_import_busy": getattr(getattr(getattr(bridge, 'env_management', None), 'imports', None), 'busy', lambda: False)(),
                             "browser_busy": getattr(bridge, 'execution_busy', lambda: False)(),
                             "chat_busy": bool(getattr(bridge.sessions, 'turn_started', None)),
-                            "features": ["observe", "act", "select", "date_time", "menu_select", "batch", "targets", "chat", "wait_for"],
+                            "features": ["observe", "act", "type", "clear", "key", "select", "check", "range", "date_time", "menu_select", "scroll_into_view", "upload_file", "batch", "targets", "chat", "wait_for"],
                             "backend": "cdp", "preset": bridge.permissions.get("preset")})
             elif self.path in ('/v1/lan/manage/openapi', '/v1/lan/manage/catalog'):
                 from environment_api import openapi, catalogue

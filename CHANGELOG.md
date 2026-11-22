@@ -6,6 +6,7 @@
 - Add a right-side conversation dock for “我的环境” with floating and fixed-insert modes.
 - Add native single- and multi-select support to Agent browser tasks, with option metadata in observe results and a controlled-form fallback when a platform popup keeps keyboard focus.
 - Add date/time input handling for native calendar controls and a re-locating menu_select action for cascading menus with multiple levels.
+- Add replaceable text input, clear and keyboard actions, desired checkbox/radio state, range controls, scroll-into-view, file upload, and state-aware action summaries.
 - Keep fixed-insert conversation docks persistent when the user clicks the page or other browser content. Page input continues normally without folding the dock.
 - Keep the DSH sidebar and conversation interactive while the middle browser page remains visible and clickable.
 - Keep DSH full-permission confirmation dialogs fully interactive, including releases that render the checkbox panel without dialog semantics.

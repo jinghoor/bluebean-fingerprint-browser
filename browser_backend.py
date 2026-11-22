@@ -407,6 +407,7 @@ class BrowserBackend:
   const nodes = document.querySelectorAll('a[href],button,input,select,textarea,[role=button],[role=link]');
   let fingerprint = 0;
   const names = [];
+  const states = [];
   for (const el of nodes) {
     const text = (el.getAttribute('aria-label') || el.innerText || el.value || '').trim()
         .replace(/\s+/g, ' ').slice(0, 40);
@@ -414,6 +415,16 @@ class BrowserBackend:
       fingerprint = (fingerprint * 31 + text.charCodeAt(i)) >>> 0;
     }
     if (names.length < 40) names.push(text);
+    if (states.length < 120) {
+      states.push({
+        key: el.id || el.getAttribute('name') || el.getAttribute('aria-label') || text,
+        tag: el.tagName.toLowerCase(),
+        value: 'value' in el ? String(el.value ?? '') : '',
+        checked: 'checked' in el ? !!el.checked : el.getAttribute('aria-checked'),
+        selected: el.tagName === 'SELECT' ? Array.from(el.selectedOptions).map(option => option.value) : el.getAttribute('aria-selected'),
+        expanded: el.getAttribute('aria-expanded'),
+      });
+    }
   }
   return JSON.stringify({
     url: location.href,
@@ -421,6 +432,7 @@ class BrowserBackend:
     count: nodes.length,
     fingerprint,
     names,
+    states,
     ready: document.readyState,
   });
 })()
@@ -443,12 +455,15 @@ class BrowserBackend:
                     "readiness":after.get('readiness')}
         before_names = set(before.get("names") or [])
         after_names = set(after.get("names") or [])
+        before_states = json.dumps(before.get("states") or [], ensure_ascii=False, sort_keys=True)
+        after_states = json.dumps(after.get("states") or [], ensure_ascii=False, sort_keys=True)
         return {
             "url_changed": before.get("url") != after.get("url"),
             "title_changed": before.get("title") != after.get("title"),
             "count_delta": (after.get("count") or 0) - (before.get("count") or 0),
             "appeared": sorted(after_names - before_names)[:8],
             "disappeared": sorted(before_names - after_names)[:8],
+            "state_changed": before_states != after_states,
             "url": after.get("url"),
             "readiness": after.get("readiness"),
         }
@@ -488,7 +503,9 @@ class BrowserBackend:
   let id = 0;
   for (const el of document.querySelectorAll(sel)) {
     // Reuse text collected for the baseline instead of scanning the page twice.
-    const rawLabel = el.getAttribute('aria-label') || el.innerText || el.value || '';
+    const rawLabel = el.getAttribute('aria-label') || el.getAttribute('name') ||
+      el.getAttribute('placeholder') || el.innerText ||
+      (el.matches('input,textarea') ? '' : el.value) || '';
     const label = rawLabel.trim().replace(/\s+/g,' ');
     if (el.matches(summarySelector)) {
       const text = label.slice(0,40);
@@ -881,7 +898,56 @@ class BrowserBackend:
         return {"element": element_id, "action": action, "at": [cx, cy],
                 "name": item["name"], "trusted": True}
 
-    def type_text(self, env: str | None, element_id: str, text: str) -> dict:
+    @staticmethod
+    def _key_definition(token: str) -> tuple[str, str, int, int]:
+        names = {
+            'CTRL': ('Control', 'ControlLeft', 17, 2), 'CONTROL': ('Control', 'ControlLeft', 17, 2),
+            'SHIFT': ('Shift', 'ShiftLeft', 16, 8), 'ALT': ('Alt', 'AltLeft', 18, 1),
+            'META': ('Meta', 'MetaLeft', 91, 4), 'ENTER': ('Enter', 'Enter', 13, 0),
+            'TAB': ('Tab', 'Tab', 9, 0), 'BACKSPACE': ('Backspace', 'Backspace', 8, 0),
+            'DELETE': ('Delete', 'Delete', 46, 0), 'ESC': ('Escape', 'Escape', 27, 0),
+            'ESCAPE': ('Escape', 'Escape', 27, 0), 'SPACE': (' ', 'Space', 32, 0),
+            'ARROWUP': ('ArrowUp', 'ArrowUp', 38, 0), 'ARROWDOWN': ('ArrowDown', 'ArrowDown', 40, 0),
+            'ARROWLEFT': ('ArrowLeft', 'ArrowLeft', 37, 0), 'ARROWRIGHT': ('ArrowRight', 'ArrowRight', 39, 0),
+            'HOME': ('Home', 'Home', 36, 0), 'END': ('End', 'End', 35, 0),
+            'PAGEUP': ('PageUp', 'PageUp', 33, 0), 'PAGEDOWN': ('PageDown', 'PageDown', 34, 0),
+        }
+        upper = token.upper()
+        if upper in names:
+            return names[upper]
+        if len(token) == 1:
+            code = 'Key' + token.upper() if token.isalpha() else 'Digit' + token
+            return token, code, ord(token.upper()), 0
+        raise ValueError(f'unsupported key token: {token}')
+
+    def _dispatch_keys(self, cdp: Cdp, keys: list[str]) -> None:
+        for raw in keys:
+            modifiers = 0
+            held: list[tuple[str, str, int, int]] = []
+            tokens = [part for part in raw.split('+') if part] if '+' in raw else [raw]
+            for token in tokens:
+                key, code, virtual_key, bit = self._key_definition(token)
+                if bit:
+                    if not any(item[2] == virtual_key for item in held):
+                        cdp.send('Input.dispatchKeyEvent', {'type':'keyDown','key':key,'code':code,
+                            'windowsVirtualKeyCode':virtual_key,'nativeVirtualKeyCode':virtual_key,
+                            'modifiers':modifiers | bit})
+                        held.append((key, code, virtual_key, bit)); modifiers |= bit
+                    continue
+                cdp.send('Input.dispatchKeyEvent', {'type':'keyDown','key':key,'code':code,
+                    'windowsVirtualKeyCode':virtual_key,'nativeVirtualKeyCode':virtual_key,
+                    'modifiers':modifiers, **({'text':token} if len(token) == 1 else {})})
+                cdp.send('Input.dispatchKeyEvent', {'type':'keyUp','key':key,'code':code,
+                    'windowsVirtualKeyCode':virtual_key,'nativeVirtualKeyCode':virtual_key,
+                    'modifiers':modifiers})
+            for key, code, virtual_key, bit in reversed(held):
+                modifiers &= ~bit
+                cdp.send('Input.dispatchKeyEvent', {'type':'keyUp','key':key,'code':code,
+                    'windowsVirtualKeyCode':virtual_key,'nativeVirtualKeyCode':virtual_key,
+                    'modifiers':modifiers})
+
+    def _prepare_editable(self, env: str | None, element_id: str,
+                          editable: bool = True) -> tuple[dict, Cdp] | dict:
         resolved_env = env or self.env_state().get("active", "")
         observation = self.observations.get(resolved_env)
         try:
@@ -890,20 +956,27 @@ class BrowserBackend:
             item = observation.by_id(element_id)
         except KeyError:
             return {'ok':False,'action_sent':False,'error_code':'STALE_OBSERVATION',
-                    'error':'Element id is not from the latest observation; observe again.',
+                    'error':'Element id is not from the latest observe; observe again before editing.',
                     'next_action':'observe'}
         if item.get('selector') and observation.document_token:
             check = self.wait_for(env, selector=item['selector'], document_token=observation.document_token,
                 identity={key:item.get(key,'') for key in ('tag','name','href')},
-                state='actionable', editable=True, timeout_ms=2000)
+                state='actionable', editable=editable, timeout_ms=2000)
             if not check.get('ok'):
                 return check
             item = {**item, 'bbox':check['state']['box'], 'point':check['state'].get('point')}
+        return item, self._cdp(env)
+
+    def type_text(self, env: str | None, element_id: str, text: str,
+                  replace: bool = False) -> dict:
+        prepared = self._prepare_editable(env, element_id)
+        if isinstance(prepared, dict):
+            return prepared
+        item, cdp = prepared
         x, y, w, h = item["bbox"]
         cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
         if item.get('point'):
             cx, cy = item['point']
-        cdp = self._cdp(env)
         self.cursor_event(env, cx, cy, "type")
         cdp.send("Input.dispatchMouseEvent", {
             "type": "mousePressed", "x": cx, "y": cy,
@@ -911,10 +984,169 @@ class BrowserBackend:
         cdp.send("Input.dispatchMouseEvent", {
             "type": "mouseReleased", "x": cx, "y": cy,
             "button": "left", "clickCount": 1})
+        if replace:
+            self._dispatch_keys(cdp, ['CTRL+A', 'BACKSPACE'])
         for char in text:
             cdp.send("Input.dispatchKeyEvent", {"type": "char", "text": char})
             time.sleep(0.03)
-        return {"element": element_id, "typed": text}
+        return {"element": element_id, "typed": text, "replaced": replace,
+                "trusted": True}
+
+    def clear_text(self, env: str | None, element_id: str) -> dict:
+        prepared = self._prepare_editable(env, element_id)
+        if isinstance(prepared, dict):
+            return prepared
+        item, cdp = prepared
+        x, y, w, h = item['bbox']
+        cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
+        if item.get('point'):
+            cx, cy = item['point']
+        self.cursor_event(env, cx, cy, 'clear')
+        cdp.send('Input.dispatchMouseEvent', {'type':'mousePressed','x':cx,'y':cy,'button':'left','clickCount':1})
+        cdp.send('Input.dispatchMouseEvent', {'type':'mouseReleased','x':cx,'y':cy,'button':'left','clickCount':1})
+        self._dispatch_keys(cdp, ['CTRL+A', 'BACKSPACE'])
+        return {'element': element_id, 'cleared': True, 'trusted': True}
+
+    def send_keys(self, env: str | None, element_id: str | None,
+                  keys: list[str]) -> dict:
+        if not isinstance(keys, list) or not keys:
+            return {'ok': False, 'action_sent': False, 'error_code': 'INVALID_KEYS',
+                    'error': 'key.keys must be a non-empty array.'}
+        cdp = self._cdp(env)
+        if element_id:
+            prepared = self._prepare_editable(env, element_id, editable=False)
+            if isinstance(prepared, dict):
+                return prepared
+            item, cdp = prepared
+            x, y, w, h = item['bbox']
+            cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
+            if item.get('point'):
+                cx, cy = item['point']
+            self.cursor_event(env, cx, cy, 'key')
+            cdp.send('Input.dispatchMouseEvent', {'type':'mousePressed','x':cx,'y':cy,'button':'left','clickCount':1})
+            cdp.send('Input.dispatchMouseEvent', {'type':'mouseReleased','x':cx,'y':cy,'button':'left','clickCount':1})
+        self._dispatch_keys(cdp, keys)
+        return {'ok': True, 'element': element_id, 'keys': keys, 'trusted': True}
+
+    def set_checked(self, env: str | None, element_id: str, checked: bool) -> dict:
+        resolved_env = env or self.env_state().get("active", "")
+        observation = self.observations.get(resolved_env)
+        try:
+            if observation is None:
+                raise KeyError(element_id)
+            item = observation.by_id(element_id)
+        except KeyError:
+            return {'ok':False,'action_sent':False,'error_code':'STALE_OBSERVATION',
+                    'error':'Element id is not from the latest observe; observe again before changing the check state.',
+                    'next_action':'observe'}
+        if item.get('tag') != 'input' or item.get('input_type') not in ('checkbox', 'radio'):
+            return {'ok':False,'action_sent':False,'error_code':'CHECK_CONTROL_REQUIRED',
+                    'error':'check works with native checkbox or radio controls.'}
+        current = bool(item.get('checked'))
+        if current == bool(checked):
+            return {'ok':True,'element':element_id,'checked':current,'changed':False,'trusted':True}
+        result = self.act(env, element_id, 'click')
+        if result.get('ok') is False:
+            return result
+        cdp = self._cdp(env)
+        state = cdp.evaluate("JSON.stringify((() => { const el=document.querySelector(" +
+            json.dumps(item['selector']) + "); return {checked:!!el.checked}; })())", timeout=5)
+        value = json.loads(state or '{}').get('checked')
+        if value != bool(checked):
+            return {'ok':False,'action_sent':True,'error_code':'CHECK_STATE_NOT_APPLIED',
+                    'error':'The control did not reach the requested state.',
+                    'checked':value,'expected':bool(checked),'outcome_unknown':True,
+                    'retry_hint':'Observe the control before retrying.'}
+        return {'ok':True,'element':element_id,'checked':value,'changed':True,'trusted':True}
+
+    def set_range(self, env: str | None, element_id: str, value: float) -> dict:
+        resolved_env = env or self.env_state().get("active", "")
+        observation = self.observations.get(resolved_env)
+        try:
+            if observation is None:
+                raise KeyError(element_id)
+            item = observation.by_id(element_id)
+        except KeyError:
+            return {'ok':False,'action_sent':False,'error_code':'STALE_OBSERVATION',
+                    'error':'Element id is not from the latest observe; observe again before setting the range.',
+                    'next_action':'observe'}
+        if item.get('tag') != 'input' or item.get('input_type') != 'range':
+            return {'ok':False,'action_sent':False,'error_code':'RANGE_CONTROL_REQUIRED',
+                    'error':'range works with native input type range controls.'}
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return {'ok':False,'action_sent':False,'error_code':'INVALID_RANGE_VALUE',
+                    'error':'range.value must be a number.'}
+        selector = item.get('selector')
+        cdp = self._cdp(env)
+        state = cdp.evaluate("JSON.stringify((() => { const el=document.querySelector(" +
+            json.dumps(selector) + "); if(!el || el.type!=='range') return {}; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(el,String(" +
+            json.dumps(value) + ")); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return {value:el.value,min:el.min,max:el.max,step:el.step}; })())", timeout=5)
+        result = json.loads(state or '{}') if state else {}
+        if result.get('value') is None or result.get('value') == '':
+            return {'ok':False,'action_sent':True,'error_code':'RANGE_NOT_APPLIED',
+                    'error':'The browser rejected the requested range value.',
+                    'outcome_unknown':True}
+        return {'ok':True,'element':element_id,'value':result['value'],
+                'min':result.get('min'),'max':result.get('max'),'step':result.get('step'),
+                'trusted':False,'mode':'native-form-events'}
+
+    def scroll_into_view(self, env: str | None, element_id: str | None = None,
+                         selector: str | None = None) -> dict:
+        resolved_env = env or self.env_state().get("active", "")
+        observation = self.observations.get(resolved_env)
+        item = None
+        if element_id:
+            try:
+                if observation is None:
+                    raise KeyError(element_id)
+                item = observation.by_id(element_id)
+            except KeyError:
+                return {'ok':False,'action_sent':False,'error_code':'STALE_OBSERVATION',
+                        'error':'Element id is not from the latest observe; observe again before scrolling.',
+                        'next_action':'observe'}
+            selector = item.get('selector')
+        if not selector:
+            return {'ok':False,'action_sent':False,'error_code':'SCROLL_TARGET_REQUIRED',
+                    'error':'Provide an observed id or a CSS selector to scroll into view.'}
+        cdp = self._cdp(env)
+        raw = cdp.evaluate("JSON.stringify((() => { const el=document.querySelector(" +
+            json.dumps(selector) + "); if(!el) return null; el.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); const r=el.getBoundingClientRect(); return {box:[r.x,r.y,r.width,r.height],point:[r.left+r.width/2,r.top+r.height/2]}; })())", timeout=5)
+        result = json.loads(raw or 'null') if raw else None
+        if not result:
+            return {'ok':False,'action_sent':False,'error_code':'TARGET_NOT_FOUND',
+                    'error':'The observed element is no longer in the document.',
+                    'next_action':'observe'}
+        return {'ok':True,'element':element_id,'selector':selector,
+                'box':result['box'],'point':result['point']}
+
+    def upload_file(self, env: str | None, element_id: str, path: str) -> dict:
+        resolved_env = env or self.env_state().get("active", "")
+        observation = self.observations.get(resolved_env)
+        try:
+            if observation is None:
+                raise KeyError(element_id)
+            item = observation.by_id(element_id)
+        except KeyError:
+            return {'ok':False,'action_sent':False,'error_code':'STALE_OBSERVATION',
+                    'error':'Element id is not from the latest observe; observe again before uploading.',
+                    'next_action':'observe'}
+        if item.get('tag') != 'input' or item.get('input_type') != 'file':
+            return {'ok':False,'action_sent':False,'error_code':'FILE_INPUT_REQUIRED',
+                    'error':'upload_file requires an input type file control.'}
+        file_path = Path(path).expanduser().resolve()
+        if not file_path.is_file():
+            return {'ok':False,'action_sent':False,'error_code':'FILE_NOT_FOUND',
+                    'error':'The selected upload file does not exist.'}
+        cdp = self._cdp(env)
+        root = cdp.send('DOM.getDocument', {'depth': 1})['result']['root']['nodeId']
+        node = cdp.send('DOM.querySelector', {'nodeId': root, 'selector': item['selector']})['result'].get('nodeId')
+        if not node:
+            return {'ok':False,'action_sent':False,'error_code':'FILE_INPUT_NOT_FOUND',
+                    'error':'The upload control is no longer in the document.',
+                    'next_action':'observe'}
+        cdp.send('DOM.setFileInputFiles', {'nodeId':node,'files':[str(file_path)]})
+        return {'ok':True,'element':element_id,'file_name':file_path.name,
+                'file_count':1,'trusted':False,'mode':'browser-file-picker'}
 
     def select_options(self, env: str | None, element_id: str,
                        values: Any = None) -> dict:

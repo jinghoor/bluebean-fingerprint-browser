@@ -52,7 +52,9 @@ PROBE_JS = r"""
   }
   const textMatched = !condition.text || !!el && (el.innerText || '').includes(condition.text);
   if (condition.identity) {
-    const name = el && (el.getAttribute('aria-label') || el.innerText || el.value ||
+    const name = el && (el.getAttribute('aria-label') || el.getAttribute('name') ||
+      el.getAttribute('placeholder') || el.innerText ||
+      (el.matches('input,textarea') ? '' : el.value) ||
       el.getAttribute('title') || '').trim().replace(/\s+/g,' ').slice(0,60);
     if (!el || name !== condition.identity.name || el.tagName.toLowerCase() !== condition.identity.tag ||
         (el.getAttribute('href') || '').slice(0,80) !== condition.identity.href)
