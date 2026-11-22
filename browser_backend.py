@@ -473,7 +473,7 @@ class BrowserBackend:
     OBSERVE_JS = r"""
 (() => {
   const out = [], names = [], idCounts = new Map(), siblingGroups = new WeakMap();
-  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup]';
+  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup],[draggable=true],[ondrop],[ondragover]';
   const sel = summarySelector + ',[onclick]';
   let count = 0, fingerprint = 0, id = 0;
   function locator(el, root) {
@@ -1139,6 +1139,46 @@ class BrowserBackend:
         return {'ok':True,'element':element_id,'value':result['value'],
                 'min':result.get('min'),'max':result.get('max'),'step':result.get('step'),
                 'trusted':False,'mode':'native-form-events'}
+
+    def drag(self, env: str | None, from_id: str, to_id: str,
+             duration_ms: int = 240) -> dict:
+        resolved_env = env or self.env_state().get("active", "")
+        observation = self.observations.get(resolved_env)
+        try:
+            if observation is None:
+                raise KeyError(from_id)
+            source = observation.by_id(from_id)
+            target = observation.by_id(to_id)
+        except KeyError:
+            return {'ok':False,'action_sent':False,'error_code':'STALE_OBSERVATION',
+                    'error':'Drag targets must come from the latest observe.',
+                    'next_action':'observe'}
+        cdp = self._cdp(env)
+        for item in (source, target):
+            if item.get('selector') and observation.document_token:
+                check = self.wait_for(env, selector=item['selector'], document_token=observation.document_token,
+                    identity={key:item.get(key,'') for key in ('tag','name','href')}, state='actionable', timeout_ms=2000,
+                    frame_path=item.get('frame_path', []), shadow_path=item.get('shadow_path', []))
+                if not check.get('ok'):
+                    return check
+                item.update({'bbox':check['state']['box'], 'point':check['state'].get('point')})
+        def point(item):
+            x,y,w,h=item['bbox']; return item.get('point') or [x+w/2,y+h/2]
+        sx, sy = point(source); tx, ty = point(target)
+        self.cursor_event(env, sx, sy, 'drag')
+        cdp.send('Input.dispatchMouseEvent', {'type':'mouseMoved','x':sx,'y':sy,'button':'none'})
+        cdp.send('Input.dispatchMouseEvent', {'type':'mousePressed','x':sx,'y':sy,'button':'left','clickCount':1})
+        steps = max(2, min(30, int(max(20, duration_ms) / 20)))
+        for index in range(1, steps + 1):
+            progress = index / steps
+            x = sx + (tx - sx) * progress
+            y = sy + (ty - sy) * progress
+            cdp.send('Input.dispatchMouseEvent', {'type':'mouseMoved','x':x,'y':y,'button':'left'})
+            self.cursor_event(env, x, y, 'drag')
+            time.sleep(max(0.001, duration_ms / 1000 / steps))
+        cdp.send('Input.dispatchMouseEvent', {'type':'mouseReleased','x':tx,'y':ty,'button':'left','clickCount':1})
+        return {'ok':True,'from':from_id,'to':to_id,'at':[tx,ty],
+                'duration_ms':duration_ms,'trusted':True}
 
     def scroll_into_view(self, env: str | None, element_id: str | None = None,
                          selector: str | None = None) -> dict:

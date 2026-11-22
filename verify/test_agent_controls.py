@@ -20,8 +20,9 @@ PROFILE = OUT / "Profile"
 PROFILE.mkdir(parents=True)
 PAGE = '''<!doctype html><input id="text" value="old"><button id="submit">提交</button>
 <input id="check" type="checkbox"><input id="range" type="range" min="0" max="100" value="10">
-<input id="file" type="file"><div id="offscreen" style="margin-top:1800px">目标区域</div>
-<pre id="state"></pre><script>
+<input id="file" type="file"><button id="drag" draggable="true">拖动</button><button id="drop">放置</button>
+<div id="offscreen" style="margin-top:1800px">目标区域</div>
+<pre id="state"></pre><script>drag.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain','ok'));drop.addEventListener('dragover',e=>e.preventDefault());drop.addEventListener('drop',e=>state.textContent+='drop:yes\\n');
 for(const x of [text,check,range,file]) for(const t of ['input','change'])
   x.addEventListener(t,e=>state.textContent+=x.id+':'+t+':'+e.isTrusted+'\\n');
 </script>'''.encode()
@@ -77,7 +78,7 @@ try:
     wait_for_target(backend, env_id)
     observed = backend.observe(env_id)
     controls = {item["selector"]: item for item in observed["elements"]}
-    assert "#text" in controls and "#check" in controls and "#range" in controls and "#file" in controls
+    assert "#text" in controls and "#check" in controls and "#range" in controls and "#file" in controls and "#drag" in controls and "#drop" in controls
     report["checks"].append("observe_finds_editable_check_range_file_controls")
 
     typed = backend.type_text(env_id, controls["#text"]["id"], "new", replace=True)
@@ -88,6 +89,8 @@ try:
     assert checked["ok"] and checked["checked"] is True
     ranged = backend.set_range(env_id, controls["#range"]["id"], 75)
     assert ranged["ok"] and ranged["value"] == "75"
+    dragged = backend.drag(env_id, controls["#drag"]["id"], controls["#drop"]["id"])
+    assert dragged["ok"]
     report["checks"].append("replace_keyboard_check_and_range_actions_apply")
 
     with tempfile.NamedTemporaryFile(prefix="bluebean-upload-", suffix=".txt", delete=False) as temp:
@@ -100,7 +103,7 @@ try:
     state = json.loads(backend._cdp(env_id).evaluate(
         "JSON.stringify({text:text.value,checked:check.checked,range:range.value,files:file.files.length,top:offscreen.getBoundingClientRect().top})"))
     assert state["text"] == "x" and state["checked"] and state["range"] == "75" and state["files"] == 1
-    report["checks"].append("file_upload_and_selector_scroll_complete")
+    report["checks"].append("file_upload_selector_scroll_and_drag_complete")
     report["passed"] = True
 finally:
     report_path = OUT / "report.json"
