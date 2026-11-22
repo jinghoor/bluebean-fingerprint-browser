@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/env/automation_task_impl.h"
+#include "chrome/browser/env/env_overlay.h"
 
 #include <utility>
 
@@ -54,9 +55,11 @@ base::ListValue OpsToJson(const std::vector<mojom::OpPtr>& ops) {
 
 AutomationTaskImpl::AutomationTaskImpl(
     mojo::PendingReceiver<mojom::AutomationTask> receiver,
-    FrameResolver resolve_frame)
+    FrameResolver resolve_frame,
+    Profile* profile)
     : receiver_(this, std::move(receiver)),
-      resolve_frame_(std::move(resolve_frame)) {}
+      resolve_frame_(std::move(resolve_frame)),
+      profile_(profile) {}
 
 AutomationTaskImpl::~AutomationTaskImpl() = default;
 
@@ -104,7 +107,8 @@ void AutomationTaskImpl::ClickTrusted(const std::string& env_id,
       script,
       base::BindOnce(
           [](base::TimeTicks began, content::RenderWidgetHostImpl* host_ptr,
-             float scale, size_t count, ClickTrustedCallback done,
+             Profile* profile, std::string env_id, float scale, size_t count,
+             ClickTrustedCallback done,
              base::Value value) {
             mojom::TaskResultPtr result = mojom::TaskResult::New();
             result->ms = (base::TimeTicks::Now() - began).InMillisecondsF();
@@ -133,6 +137,8 @@ void AutomationTaskImpl::ClickTrusted(const std::string& env_id,
                 const double y = item.GetList()[1].GetIfDouble().value_or(0);
                 const gfx::PointF position(static_cast<float>(x) * scale,
                                            static_cast<float>(y) * scale);
+                UpdateAutomationCursor(profile, env_id, static_cast<float>(x),
+                                       static_cast<float>(y), "click");
                 const base::TimeTicks now = base::TimeTicks::Now();
                 blink::WebMouseEvent press(
                     blink::WebInputEvent::Type::kMouseDown, position, position,
@@ -159,7 +165,8 @@ void AutomationTaskImpl::ClickTrusted(const std::string& env_id,
                        << " ms=" << result->ms;
             std::move(done).Run(std::move(result));
           },
-          started, host, device_scale, wanted_count, std::move(callback)),
+          started, host, profile_, env_id, device_scale, wanted_count,
+          std::move(callback)),
       /*world_id=*/1);
 }
 

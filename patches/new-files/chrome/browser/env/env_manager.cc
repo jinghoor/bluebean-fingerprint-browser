@@ -1648,7 +1648,8 @@ void EnvManager::MaybeStartAutomationServer() {
             content::WebContents* contents = manager->FindTabForEnv(env_id);
             return contents ? contents->GetPrimaryMainFrame() : nullptr;
           },
-          base::Unretained(this)));
+          base::Unretained(this)),
+      profile_);
   automation_task_impl_.reset(impl);
   automation_server_ = std::make_unique<AutomationServer>(
       profile_, std::move(automation_task_));

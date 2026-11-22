@@ -19,6 +19,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/no_destructor.h"
 #include "base/supports_user_data.h"
@@ -41,10 +43,12 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/compositor/layer.h"
+#include "cc/paint/paint_flags.h"
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/controls/native/native_view_host.h"
@@ -73,6 +77,120 @@ constexpr SkScalar kCornerRadius = 16;
 
 class EnvOverlayHost;
 class EnvOverlayClickAway;
+
+class EnvAutomationCursorView : public views::View {
+  METADATA_HEADER(EnvAutomationCursorView, views::View)
+
+ public:
+  EnvAutomationCursorView() {
+    SetCanProcessEventsWithinSubtree(false);
+    SetFocusBehavior(FocusBehavior::NEVER);
+    SetVisible(false);
+  }
+
+  EnvAutomationCursorView(const EnvAutomationCursorView&) = delete;
+  EnvAutomationCursorView& operator=(const EnvAutomationCursorView&) = delete;
+  ~EnvAutomationCursorView() override = default;
+
+  void ShowAt(const gfx::PointF& target, std::string action) {
+    const base::TimeTicks now = base::TimeTicks::Now();
+    from_ = visible_ ? position_ : target;
+    target_ = target;
+    position_ = from_;
+    action_ = std::move(action);
+    started_ = now;
+    duration_ = action_ == "click" ? base::Milliseconds(70)
+                                   : base::Milliseconds(90);
+    visible_ = true;
+    SetVisible(true);
+    timer_.Start(FROM_HERE, base::Milliseconds(16),
+                 base::BindRepeating(&EnvAutomationCursorView::Animate,
+                                     weak_factory_.GetWeakPtr()));
+    SchedulePaint();
+  }
+
+  void HideCursor() {
+    timer_.Stop();
+    visible_ = false;
+    SetVisible(false);
+    SchedulePaint();
+  }
+
+ protected:
+  void OnPaint(gfx::Canvas* canvas) override {
+    if (!visible_) {
+      return;
+    }
+    const base::TimeDelta age = base::TimeTicks::Now() - started_;
+    const float pulse = std::clamp(
+        static_cast<float>(age.InMillisecondsF() / 260.0), 0.0f, 1.0f);
+    const gfx::PointF p = position_;
+
+    cc::PaintFlags shadow;
+    shadow.setAntiAlias(true);
+    shadow.setStyle(cc::PaintFlags::kFill_Style);
+    shadow.setColor(SkColorSetARGB(70, 15, 23, 42));
+    canvas->DrawCircle(gfx::PointF(p.x() + 1.0f, p.y() + 2.0f), 8.0f,
+                       shadow);
+
+    cc::PaintFlags core;
+    core.setAntiAlias(true);
+    core.setStyle(cc::PaintFlags::kFill_Style);
+    core.setColor(SkColorSetARGB(245, 37, 116, 219));
+    canvas->DrawCircle(p, 6.0f, core);
+
+    cc::PaintFlags ring;
+    ring.setAntiAlias(true);
+    ring.setStyle(cc::PaintFlags::kStroke_Style);
+    ring.setStrokeWidth(2.0f);
+    const int alpha = action_ == "error" ? 220 : 180;
+    ring.setColor(SkColorSetARGB(alpha, action_ == "error" ? 232 : 96,
+                                 action_ == "error" ? 86 : 165,
+                                 action_ == "error" ? 76 : 250));
+    canvas->DrawCircle(p, 11.0f + pulse * (action_ == "click" ? 15.0f : 4.0f),
+                       ring);
+
+    if (action_ == "scroll") {
+      cc::PaintFlags scroll;
+      scroll.setAntiAlias(true);
+      scroll.setStyle(cc::PaintFlags::kStroke_Style);
+      scroll.setStrokeWidth(2.0f);
+      scroll.setColor(SkColorSetARGB(190, 37, 116, 219));
+      canvas->DrawLine(gfx::PointF(p.x(), p.y() + 16.0f),
+                       gfx::PointF(p.x(), p.y() + 28.0f), scroll);
+    }
+  }
+
+ private:
+  void Animate() {
+    const float raw = std::clamp(
+        static_cast<float>((base::TimeTicks::Now() - started_).InMicroseconds()) /
+            static_cast<float>(duration_.InMicroseconds()),
+        0.0f, 1.0f);
+    const float eased = raw * raw * (3.0f - 2.0f * raw);
+    position_ = gfx::PointF(
+        from_.x() + (target_.x() - from_.x()) * eased,
+        from_.y() + (target_.y() - from_.y()) * eased);
+    if (raw >= 1.0f) {
+      timer_.Stop();
+      position_ = target_;
+    }
+    SchedulePaint();
+  }
+
+  gfx::PointF from_;
+  gfx::PointF target_;
+  gfx::PointF position_;
+  std::string action_ = "move";
+  base::TimeTicks started_;
+  base::TimeDelta duration_ = base::Milliseconds(90);
+  bool visible_ = false;
+  base::RepeatingTimer timer_;
+  base::WeakPtrFactory<EnvAutomationCursorView> weak_factory_{this};
+};
+
+BEGIN_METADATA(EnvAutomationCursorView)
+END_METADATA
 
 namespace {
 
@@ -218,6 +336,26 @@ class EnvOverlayHost : public views::View,
   }
   bool IsLayerShown() const { return web_view_ && web_view_->GetVisible() && !shrunk_; }
 
+  void SetAutomationCursor(const std::string& env_id, float x, float y,
+                           const std::string& action) {
+    if (!cursor_view_ || !manager_) {
+      return;
+    }
+    active_env_id_ = manager_->active_env_id();
+    if (env_id != active_env_id_) {
+      cursor_states_[env_id] = gfx::PointF(x, y);
+      return;
+    }
+    cursor_states_[env_id] = gfx::PointF(x, y);
+    cursor_view_->ShowAt(PagePointToViewPoint(gfx::PointF(x, y)), action);
+  }
+
+  void HideAutomationCursor() {
+    if (cursor_view_) {
+      cursor_view_->HideCursor();
+    }
+  }
+
   void SetOverlayVisible(bool visible);
   gfx::Rect ReserveContentBounds(const gfx::Rect& bounds);
   // Width override: 0 keeps the product 2/3 rule. The DSH web client folds its sidebar into an icon rail below
@@ -269,6 +407,13 @@ class EnvOverlayHost : public views::View,
 
  private:
   void LayoutContents();
+  gfx::PointF PagePointToViewPoint(const gfx::PointF& point) const {
+    if (!cursor_view_) {
+      return point;
+    }
+    const gfx::Rect bounds = cursor_view_->bounds();
+    return gfx::PointF(point.x() - bounds.x(), point.y() - bounds.y());
+  }
   gfx::Rect ContentAreaInParent() const;
   gfx::Rect VisibleCardBounds() const;
   gfx::Rect DockedSidebarBounds() const;
@@ -306,10 +451,12 @@ class EnvOverlayHost : public views::View,
   raw_ptr<BrowserView> browser_view_ = nullptr;
   raw_ptr<views::View> content_area_ = nullptr;
   raw_ptr<views::WebView> web_view_ = nullptr;
+  raw_ptr<EnvAutomationCursorView> cursor_view_ = nullptr;
   // The layer owns its environment switcher: a plain view hierarchy above the WebView, so the DSH sidebar is not
   // involved and the old native panel stays retired.
   raw_ptr<EnvManager> manager_ = nullptr;
   std::string active_env_id_;
+  std::map<std::string, gfx::PointF> cursor_states_;
   raw_ptr<aura::Window> event_window_ = nullptr;
   raw_ptr<aura::Window> page_window_ = nullptr;
   std::unique_ptr<EnvOverlayClickAway> click_away_;
@@ -369,6 +516,10 @@ EnvOverlayHost::EnvOverlayHost(content::BrowserContext* context,
     if (manager_) {
       active_env_id_ = manager_->active_env_id();
     }
+    // Add the pointer before the DSH host. BrowserView paints later children
+    // above earlier children, so the DSH shell remains above the marker.
+    cursor_view_ = browser_view_->AddChildView(
+        std::make_unique<EnvAutomationCursorView>());
   }
 
   // No C++ title bar: it left an unpainted strip where the page showed through. The page draws its own collapse button
@@ -403,6 +554,7 @@ EnvOverlayHost::EnvOverlayHost(content::BrowserContext* context,
 }
 
 EnvOverlayHost::~EnvOverlayHost() {
+  HideAutomationCursor();
   Observe(nullptr);
   if (event_window_ && click_away_) {
     event_window_->RemovePreTargetHandler(click_away_.get());
@@ -567,6 +719,19 @@ void EnvOverlayHost::LayoutContents() {
   const gfx::Rect content = ContentAreaInParent();
   if (content.IsEmpty()) {
     return;
+  }
+  if (cursor_view_) {
+    cursor_view_->SetBoundsRect(content);
+  }
+  if (manager_) {
+    const std::string next_env = manager_->active_env_id();
+    if (next_env != active_env_id_) {
+      active_env_id_ = next_env;
+      auto it = cursor_states_.find(active_env_id_);
+      if (it != cursor_states_.end() && cursor_view_) {
+        cursor_view_->ShowAt(PagePointToViewPoint(it->second), "move");
+      }
+    }
   }
   const int available = std::max(1, content.width() - kMargin * 2);
   const int viewport_width = docked_right_
@@ -1035,6 +1200,36 @@ bool OverlayVisible(BrowserWindowInterface* window) {
 std::string OverlayGeometry(BrowserWindowInterface* window) {
   EnvOverlayHost* host = Find(window);
   return host ? host->Describe() : "none";
+}
+
+bool UpdateAutomationCursor(Profile* profile, const std::string& env_id,
+                            float x, float y, const std::string& action) {
+  if (!profile) {
+    return false;
+  }
+  for (const auto& [browser_view, host] : Hosts()) {
+    if (browser_view && browser_view->GetProfile() == profile && host) {
+      host->SetAutomationCursor(env_id, x, y, action);
+      LOG(ERROR) << "ENVCURSOR: env=" << env_id << " action=" << action
+                 << " x=" << x << " y=" << y;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool HideAutomationCursor(Profile* profile) {
+  if (!profile) {
+    return false;
+  }
+  bool hidden = false;
+  for (const auto& [browser_view, host] : Hosts()) {
+    if (browser_view && browser_view->GetProfile() == profile && host) {
+      host->HideAutomationCursor();
+      hidden = true;
+    }
+  }
+  return hidden;
 }
 
 void ShowAssistantLayer(BrowserWindowInterface* window) {

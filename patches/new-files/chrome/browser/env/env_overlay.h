@@ -14,6 +14,7 @@
 
 class BrowserWindowInterface;
 class BrowserView;
+class Profile;
 namespace content {
 class WebContents;
 }
@@ -83,6 +84,12 @@ bool RefreshOverlay(BrowserWindowInterface* window, const GURL& url);
 
 // Rectangle the overlay host currently occupies, in the same coordinates as the command reports.
 std::string OverlayGeometry(BrowserWindowInterface* window);
+
+// Draw an Agent action marker in the native browser compositor. The marker is
+// scoped to one environment and remains outside the page renderer.
+bool UpdateAutomationCursor(Profile* profile, const std::string& env_id,
+                            float x, float y, const std::string& action);
+bool HideAutomationCursor(Profile* profile);
 
 }  // namespace env
 

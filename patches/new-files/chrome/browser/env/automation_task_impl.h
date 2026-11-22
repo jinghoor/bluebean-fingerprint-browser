@@ -11,6 +11,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/env/automation_task.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -18,6 +19,8 @@
 namespace content {
 class RenderFrameHost;
 }
+
+class Profile;
 
 namespace env {
 
@@ -33,7 +36,8 @@ class AutomationTaskImpl : public mojom::AutomationTask {
       base::RepeatingCallback<content::RenderFrameHost*(const std::string& env_id)>;
 
   AutomationTaskImpl(mojo::PendingReceiver<mojom::AutomationTask> receiver,
-                     FrameResolver resolve_frame);
+                     FrameResolver resolve_frame,
+                     Profile* profile);
   AutomationTaskImpl(const AutomationTaskImpl&) = delete;
   AutomationTaskImpl& operator=(const AutomationTaskImpl&) = delete;
   ~AutomationTaskImpl() override;
@@ -49,6 +53,7 @@ class AutomationTaskImpl : public mojom::AutomationTask {
  private:
   mojo::Receiver<mojom::AutomationTask> receiver_;
   FrameResolver resolve_frame_;
+  raw_ptr<Profile> profile_ = nullptr;
   base::WeakPtrFactory<AutomationTaskImpl> weak_factory_{this};
 };
 

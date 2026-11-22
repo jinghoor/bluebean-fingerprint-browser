@@ -661,12 +661,14 @@ class BrowserBackend:
         return alive
 
     def kernel_task(self, env: str | None, ops: list[dict],
-                    timeout: float = 10.0) -> dict:
+                    timeout: float = 10.0,
+                    cursor: dict | None = None) -> dict:
         """Run ops through the in-browser executor (mojom::AutomationTask) over the socket."""
         import socket as socket_module
         port = int(self.KERNEL_PORT_FILE.read_text(encoding="utf-8").strip())
         token = self.KERNEL_TOKEN_FILE.read_text(encoding="utf-8").strip()
-        payload = json.dumps({"token": token, "env": env or "", "ops": ops})
+        payload = json.dumps({"token": token, "env": env or "", "ops": ops,
+                              **({"cursor": cursor} if cursor else {})})
         started = time.perf_counter()
         with socket_module.create_connection(("127.0.0.1", port), timeout=timeout) as conn:
             conn.sendall((payload + "\n").encode())
@@ -679,6 +681,19 @@ class BrowserBackend:
         reply = json.loads(buffer.decode() or "{}")
         reply["wall_ms"] = round((time.perf_counter() - started) * 1000, 2)
         return reply
+
+    def cursor_event(self, env: str | None, x: float, y: float,
+                     action: str = "move") -> bool:
+        """Send a best-effort native cursor event without touching the page."""
+        if not (self.KERNEL_PORT_FILE.exists() and self.KERNEL_TOKEN_FILE.exists()):
+            return False
+        try:
+            reply = self.kernel_task(env, [], timeout=1.5,
+                                     cursor={"x": float(x), "y": float(y),
+                                             "action": action})
+            return bool(reply.get("ok", True))
+        except Exception:
+            return False
 
     def click_selectors(self, env: str | None, selectors: list[str],
                         trusted: bool = True, kernel: bool = True) -> dict:
@@ -725,6 +740,7 @@ class BrowserBackend:
                 continue
             if point.get("covered"):
                 covered += 1
+            self.cursor_event(env, point["x"], point["y"], "click")
             cdp.send("Input.dispatchMouseEvent",
                      {"type": "mousePressed", "x": point["x"], "y": point["y"],
                       "button": "left", "clickCount": 1})
@@ -798,6 +814,7 @@ class BrowserBackend:
             cx, cy = item['point']
         cdp = self._cdp(env)
         if action in ("click", "hover"):
+            self.cursor_event(env, cx, cy, "click" if action == "click" else "move")
             cdp.send("Input.dispatchMouseEvent", {
                 "type": "mouseMoved", "x": cx, "y": cy, "button": "none"})
             if action == "click":
@@ -808,6 +825,7 @@ class BrowserBackend:
                     "type": "mouseReleased", "x": cx, "y": cy,
                     "button": "left", "clickCount": 1})
         elif action == "focus":
+            self.cursor_event(env, cx, cy, "focus")
             cdp.evaluate(f"document.elementFromPoint({cx},{cy})?.focus()")
         else:
             raise ValueError(f"unsupported action {action!r}")
@@ -837,6 +855,7 @@ class BrowserBackend:
         if item.get('point'):
             cx, cy = item['point']
         cdp = self._cdp(env)
+        self.cursor_event(env, cx, cy, "type")
         cdp.send("Input.dispatchMouseEvent", {
             "type": "mousePressed", "x": cx, "y": cy,
             "button": "left", "clickCount": 1})
@@ -847,6 +866,22 @@ class BrowserBackend:
             cdp.send("Input.dispatchKeyEvent", {"type": "char", "text": char})
             time.sleep(0.03)
         return {"element": element_id, "typed": text}
+
+    def scroll(self, env: str | None, delta_x: float = 0,
+               delta_y: float = 640, x: float | None = None,
+               y: float | None = None) -> dict:
+        cdp = self._cdp(env)
+        if x is None or y is None:
+            point = cdp.evaluate(
+                "JSON.stringify({x: innerWidth / 2, y: innerHeight / 2})")
+            viewport = json.loads(point or "{}")
+            x = float(viewport.get("x", 0))
+            y = float(viewport.get("y", 0))
+        self.cursor_event(env, x, y, "scroll")
+        cdp.send("Input.dispatchMouseEvent", {
+            "type": "mouseWheel", "x": x, "y": y,
+            "deltaX": float(delta_x), "deltaY": float(delta_y)})
+        return {"at": [x, y], "delta_x": delta_x, "delta_y": delta_y}
 
     def read(self, env: str | None, selector: str = "body",
              limit: int = 2000) -> dict:

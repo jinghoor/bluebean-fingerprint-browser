@@ -68,7 +68,7 @@ def load_token(port_hint: int) -> tuple[int, str]:
 
 
 
-MUTATING_STEPS = {"act", "type", "goto", "clicks", "batch"}
+MUTATING_STEPS = {"act", "type", "goto", "clicks", "batch", "scroll"}
 
 
 def needs_approval(preset: str, step: str) -> bool:
@@ -249,6 +249,14 @@ class Bridge:
             result = self.backend.click_selectors(env, selectors, trusted)
         elif name == "batch":
             result = self.backend.batch(env, args.get("ops") or [])
+        elif name == "scroll":
+            result = self.backend.scroll(
+                env,
+                float(args.get("delta_x", 0)),
+                float(args.get("delta_y", 640)),
+                float(args["x"]) if "x" in args else None,
+                float(args["y"]) if "y" in args else None,
+            )
         elif name == "read":
             result = self.backend.read(env, args.get("selector", "body"),
                                        int(args.get("limit", 2000)))
@@ -326,7 +334,7 @@ class Bridge:
             return {"ok": False, "error": "no steps"}
         if not isinstance(steps, list) or any(not isinstance(step, dict) or len(step) != 1 for step in steps):
             return {"ok": False, "error": "steps must be an array of single-action objects"}
-        supported = {'observe', 'act', 'type', 'goto', 'clicks', 'batch', 'read', 'shot', 'wait', 'wait_for', 'env'}
+        supported = {'observe', 'act', 'type', 'goto', 'clicks', 'batch', 'scroll', 'read', 'shot', 'wait', 'wait_for', 'env'}
         for step in steps:
             name, args = next(iter(step.items()))
             if name not in supported or (args is not None and not isinstance(args, dict)):

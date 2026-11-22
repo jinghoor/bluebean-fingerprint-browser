@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/env/automation_server.h"
+#include "chrome/browser/env/env_overlay.h"
 
 #include <optional>
 #include <utility>
@@ -190,7 +191,20 @@ void AutomationServer::HandleLine(const std::string& line) {
   }
   const std::string* env_id = request.FindString("env");
   const base::ListValue* raw_ops = request.FindList("ops");
-  if (!env_id || !raw_ops) {
+  if (!env_id) {
+    return;
+  }
+
+  if (const base::DictValue* cursor = request.FindDict("cursor")) {
+    const double x = cursor->FindDouble("x").value_or(0);
+    const double y = cursor->FindDouble("y").value_or(0);
+    const std::string action = cursor->FindString("action")
+                                   ? *cursor->FindString("action")
+                                   : "move";
+    UpdateAutomationCursor(profile_, *env_id, static_cast<float>(x),
+                            static_cast<float>(y), action);
+  }
+  if (!raw_ops) {
     return;
   }
 
