@@ -1243,7 +1243,8 @@ class BrowserBackend:
         resolved_env = env or self.env_state().get('active', '')
         folder = DATA_ROOT / 'downloads' / (resolved_env or 'active')
         folder.mkdir(parents=True, exist_ok=True)
-        before = {item.name for item in folder.iterdir() if item.is_file()}
+        before = {item.name: (item.stat().st_mtime_ns, item.stat().st_size)
+                  for item in folder.iterdir() if item.is_file()}
         cdp = self._cdp(env)
         behavior = {'behavior':'allow','downloadPath':str(folder)}
         reply = cdp.send('Page.setDownloadBehavior', behavior, timeout=5)
@@ -1255,7 +1256,10 @@ class BrowserBackend:
         timeout = max(0, min(120000, int(timeout_ms))) / 1000
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            candidates = [item for item in folder.iterdir() if item.is_file() and item.name not in before and not item.name.endswith('.crdownload')]
+            candidates = [item for item in folder.iterdir()
+                          if item.is_file() and not item.name.endswith('.crdownload') and
+                          (item.name not in before or
+                           (item.stat().st_mtime_ns, item.stat().st_size) != before[item.name])]
             if candidates:
                 chosen = max(candidates, key=lambda item: item.stat().st_mtime)
                 return {'ok':True,'env':resolved_env,'file_name':chosen.name,
@@ -1264,6 +1268,33 @@ class BrowserBackend:
         return {'ok':False,'error_code':'DOWNLOAD_TIMEOUT',
                 'error':'No completed download appeared before the timeout.',
                 'download_dir':str(folder),'timeout_ms':int(timeout_ms)}
+
+    def clipboard(self, env: str | None, mode: str, text: str | None = None) -> dict:
+        cdp = self._cdp(env)
+        if mode == 'write':
+            if not isinstance(text, str):
+                return {'ok':False,'error_code':'INVALID_CLIPBOARD_TEXT','error':'clipboard.write requires text.'}
+            raw = cdp.evaluate("navigator.clipboard.writeText(" + json.dumps(text) + ").then(()=>true).catch(()=>false)", timeout=5, await_promise=True)
+            if raw is not True:
+                return {'ok':False,'error_code':'CLIPBOARD_WRITE_DENIED','error':'The page or browser denied clipboard write access.'}
+            return {'ok':True,'mode':'write','length':len(text)}
+        if mode == 'read':
+            raw = cdp.evaluate("navigator.clipboard.readText().then(v=>JSON.stringify({ok:true,text:v})).catch(e=>JSON.stringify({ok:false,error:String(e)}))", timeout=5, await_promise=True)
+            result = json.loads(raw or '{}') if raw else {}
+            if not result.get('ok'):
+                return {'ok':False,'error_code':'CLIPBOARD_READ_DENIED','error':'The page or browser denied clipboard read access.'}
+            return {'ok':True,'mode':'read','text':result.get('text','')}
+        return {'ok':False,'error_code':'INVALID_CLIPBOARD_MODE','error':'clipboard.mode must be read or write.'}
+
+    def accessibility_tree(self, env: str | None, limit: int = 120) -> dict:
+        cdp = self._cdp(env)
+        reply = cdp.send('Accessibility.getFullAXTree', timeout=10)
+        if reply.get('error'):
+            return {'ok':False,'error_code':'ACCESSIBILITY_UNAVAILABLE',
+                    'error':reply['error'].get('message','accessibility tree unavailable')}
+        nodes = (reply.get('result') or {}).get('nodes') or []
+        return {'ok':True,'nodes':nodes[:max(1,min(500,int(limit)))],
+                'total':len(nodes)}
 
     def select_options(self, env: str | None, element_id: str,
                        values: Any = None) -> dict:
