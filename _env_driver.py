@@ -110,6 +110,7 @@ class Cdp:
         self._ws = ws_sync.connect(ws_url, open_timeout=open_timeout,
                                    close_timeout=2, max_size=1 << 22)
         self._id = 0
+        self._events = []
 
     def __enter__(self) -> "Cdp":
         return self
@@ -137,7 +138,19 @@ class Cdp:
                 return {}
             if msg.get("id") == want:
                 return msg
+            if msg.get("method"):
+                self._events.append(msg)
+                # JavaScript dialogs pause the renderer and can leave the
+                # command that opened them without a response until the
+                # dialog is handled. Return control immediately so the
+                # bridge can surface the dialog action instead of timing out.
+                if msg.get("method") == "Page.javascriptDialogOpening":
+                    return {"id": want, "result": {}, "dialog_opening": True}
         return {}
+
+    def pop_events(self) -> list[dict]:
+        events, self._events = self._events, []
+        return events
 
     def evaluate(self, expr: str, timeout: float = 10.0, await_promise: bool = False):
         msg = self.send("Runtime.evaluate",

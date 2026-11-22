@@ -321,6 +321,7 @@ class BrowserBackend:
             self._drop_session(key)
         target = target or self.target_for_env(env)
         cdp = BrowserCdp(target["webSocketDebuggerUrl"], open_timeout=8)
+        cdp.send('Page.enable', timeout=5)
         self._sessions[key] = (target["id"], cdp)
         if validated is not None:
             validated[key] = cdp
@@ -853,6 +854,57 @@ class BrowserBackend:
         return {'ok': False, 'url': url, 'navigation_sent': True,
                 'error': 'navigation sent but page readiness was not confirmed',
                 'detail': last_error, 'waited_ms': round((time.monotonic() - started) * 1000, 2)}
+
+    def new_tab(self, env: str | None, url: str | None = None) -> dict:
+        import env_cli
+        target_env = env or self.env_state().get('active', '')
+        command = {'command': 'newtab', 'env_id': target_env}
+        if url:
+            command['url'] = url
+        result = env_cli.send(env_cli.resolve_profile_dir(PROFILE), command, 20)
+        return {**result, 'env': target_env, 'url': url or ''}
+
+    def switch_tab(self, env: str | None, index: int) -> dict:
+        import env_cli
+        target_env = env or self.env_state().get('active', '')
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            return {'ok':False,'error_code':'INVALID_TAB_INDEX','error':'tab index must be a non-negative integer.'}
+        result = env_cli.send(env_cli.resolve_profile_dir(PROFILE),
+                              {'command':'selecttab','env_id':target_env,'index':index}, 20)
+        return {**result, 'env': target_env, 'index': index}
+
+    def close_tab(self, env: str | None) -> dict:
+        target = self.target_for_env(env)
+        cdp = self._cdp(env)
+        result = cdp.send('Page.close', timeout=5)
+        self._drop_session(env or self.env_state().get('active', ''))
+        return {'ok': True, 'env': env or self.env_state().get('active', ''),
+                'target_id': target.get('id',''), 'closed': result.get('result') is not None}
+
+    def pending_dialog(self, env: str | None) -> dict | None:
+        cdp = self._cdp(env)
+        events = cdp.pop_events()
+        for event in events:
+            if event.get('method') == 'Page.javascriptDialogOpening':
+                params = event.get('params') or {}
+                return {'dialog_open': True,
+                        'dialog_type': params.get('type',''),
+                        'message': params.get('message',''),
+                        'default_prompt': params.get('defaultPrompt','')}
+        return None
+
+    def handle_dialog(self, env: str | None, accept: bool = True,
+                      prompt_text: str | None = None) -> dict:
+        cdp = self._cdp(env)
+        params = {'accept': bool(accept)}
+        if prompt_text is not None:
+            params['promptText'] = str(prompt_text)
+        result = cdp.send('Page.handleJavaScriptDialog', params, timeout=5)
+        if result.get('error'):
+            return {'ok':False,'error_code':'DIALOG_NOT_OPEN',
+                    'error':result['error'].get('message','dialog is not open')}
+        return {'ok':True,'accepted':bool(accept),'prompt_text':prompt_text,
+                'trusted':True}
 
     def act(self, env: str | None, element_id: str, action: str = "click") -> dict:
         if action not in ('click', 'hover', 'focus'):

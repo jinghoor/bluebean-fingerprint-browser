@@ -53,6 +53,8 @@ DEFAULT_PERMISSIONS = {
                 "select": "allow", "check": "allow", "range": "allow",
                 "date_time": "allow", "menu_select": "allow",
                 "scroll_into_view": "allow", "upload_file": "allow",
+                "new_tab": "allow", "switch_tab": "allow", "close_tab": "allow",
+                "dialog": "allow",
                 "env_activate": "allow", "shot": "allow"},
     "max_parallel": 4,
     "audit": True,
@@ -74,7 +76,8 @@ def load_token(port_hint: int) -> tuple[int, str]:
 
 MUTATING_STEPS = {"act", "type", "clear", "key", "select", "check", "range",
                   "date_time", "menu_select", "scroll_into_view", "upload_file",
-                  "goto", "clicks", "batch", "scroll"}
+                  "goto", "new_tab", "switch_tab", "close_tab", "dialog",
+                  "clicks", "batch", "scroll"}
 
 
 def needs_approval(preset: str, step: str) -> bool:
@@ -263,6 +266,14 @@ class Bridge:
             result = self.backend.upload_file(env, args["id"], args["path"])
         elif name == "goto":
             result = self.backend.goto(env, args["url"], int(args["wait_ms"]) if "wait_ms" in args else None)
+        elif name == "new_tab":
+            result = self.backend.new_tab(env, args.get("url"))
+        elif name == "switch_tab":
+            result = self.backend.switch_tab(env, args.get("index", -1))
+        elif name == "close_tab":
+            result = self.backend.close_tab(env)
+        elif name == "dialog":
+            result = self.backend.handle_dialog(env, bool(args.get("accept", True)), args.get("prompt_text"))
         elif name == "clicks":
             selectors = args.get("selectors") or []
             trusted = bool(args.get("trusted", True))
@@ -298,10 +309,16 @@ class Bridge:
         else:
             raise ValueError(f"unknown step {name!r}")
         elapsed = (time.perf_counter() - started) * 1000
+        if name in MUTATING_STEPS and result.get('ok') is not False:
+            dialog = self.backend.pending_dialog(env)
+            if isinstance(dialog, dict) and dialog:
+                result.update(dialog, error_code='JAVASCRIPT_DIALOG_OPEN',
+                              next_action={'kind':'browser_task','step':'dialog',
+                                           'message':'先由用户或 Agent 处理当前网页对话框，再继续后续页面操作。'})
         changed = None
         snapshot_warning = None
         # Mutating steps answer "what happened" without a second round trip from the agent.
-        if name in ("act", "type", "clear", "key", "select", "check", "range", "date_time", "menu_select", "scroll_into_view", "upload_file", "goto") and result.get('ok') is not False:
+        if name in ("act", "type", "clear", "key", "select", "check", "range", "date_time", "menu_select", "scroll_into_view", "upload_file", "goto", "new_tab", "switch_tab", "close_tab", "dialog") and result.get('ok') is not False:
             key = env or ""
             before = self.snapshots.get(key, {})
             try:
@@ -360,9 +377,10 @@ class Bridge:
             return {"ok": False, "error": "no steps"}
         if not isinstance(steps, list) or any(not isinstance(step, dict) or len(step) != 1 for step in steps):
             return {"ok": False, "error": "steps must be an array of single-action objects"}
-        supported = {'observe', 'act', 'type', 'clear', 'key', 'select', 'check', 'range',
+        supported = {'observe', 'act', 'type', 'clear', 'key', 'select', 'check', 'range', 'dialog',
                      'date_time', 'menu_select', 'scroll_into_view', 'upload_file',
-                     'goto', 'clicks', 'batch', 'scroll', 'read', 'shot', 'wait', 'wait_for', 'env'}
+                     'goto', 'new_tab', 'switch_tab', 'close_tab', 'clicks', 'batch',
+                     'scroll', 'read', 'shot', 'wait', 'wait_for', 'env'}
         for step in steps:
             name, args = next(iter(step.items()))
             if name not in supported or (args is not None and not isinstance(args, dict)):
@@ -799,7 +817,7 @@ def make_handler(bridge: Bridge, token: str):
                             "environment_import_busy": getattr(getattr(getattr(bridge, 'env_management', None), 'imports', None), 'busy', lambda: False)(),
                             "browser_busy": getattr(bridge, 'execution_busy', lambda: False)(),
                             "chat_busy": bool(getattr(bridge.sessions, 'turn_started', None)),
-                            "features": ["observe", "act", "type", "clear", "key", "select", "check", "range", "date_time", "menu_select", "scroll_into_view", "upload_file", "batch", "targets", "chat", "wait_for"],
+                            "features": ["observe", "act", "type", "clear", "key", "select", "check", "range", "dialog", "date_time", "menu_select", "scroll_into_view", "upload_file", "new_tab", "switch_tab", "close_tab", "batch", "targets", "chat", "wait_for"],
                             "backend": "cdp", "preset": bridge.permissions.get("preset")})
             elif self.path in ('/v1/lan/manage/openapi', '/v1/lan/manage/catalog'):
                 from environment_api import openapi, catalogue
