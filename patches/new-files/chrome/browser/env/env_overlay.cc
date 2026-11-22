@@ -579,6 +579,11 @@ class EnvOverlayClickAway : public ui::EventHandler {
     if (!host_->IsLayerShown()) {
       return;
     }
+    // Fixed insertion is a persistent layout mode. Page presses must remain
+    // ordinary page input and must never fold the conversation away.
+    if (host_->fixed_right()) {
+      return;
+    }
     if (host_->PressLandedOnLayer(*event)) {
       return;
     }
