@@ -52,6 +52,7 @@ DEFAULT_PERMISSIONS = {
                 "type": "allow", "clear": "allow", "key": "allow",
                 "select": "allow", "check": "allow", "range": "allow",
                 "drag": "allow",
+                "canvas": "allow",
                 "date_time": "allow", "menu_select": "allow",
                 "scroll_into_view": "allow", "upload_file": "allow",
                 "download_wait": "allow",
@@ -80,7 +81,7 @@ def load_token(port_hint: int) -> tuple[int, str]:
 MUTATING_STEPS = {"act", "type", "clear", "key", "select", "check", "range",
                   "date_time", "menu_select", "scroll_into_view", "upload_file",
                   "drag", "download_wait",
-                  "clipboard", "accessibility",
+                  "canvas", "clipboard", "accessibility",
                   "goto", "new_tab", "switch_tab", "close_tab", "dialog",
                   "clicks", "batch", "scroll"}
 
@@ -262,6 +263,8 @@ class Bridge:
             result = self.backend.set_range(env, args["id"], args.get("value"))
         elif name == "drag":
             result = self.backend.drag(env, args["from"], args["to"], args.get("duration_ms", 240))
+        elif name == "canvas":
+            result = self.backend.canvas_action(env, args.get("action", ""), args.get("selector"), args.get("point"), args.get("from_point"), args.get("to_point"), args.get("text"), bool(args.get("replace", False)), args.get("delta_y", 0), args.get("duration_ms", 300), args.get("modifiers"))
         elif name == "date_time":
             result = self.backend.set_date_time(env, args["id"], args.get("value", ""))
         elif name == "menu_select":
@@ -331,7 +334,7 @@ class Bridge:
         changed = None
         snapshot_warning = None
         # Mutating steps answer "what happened" without a second round trip from the agent.
-        if name in ("act", "type", "clear", "key", "select", "check", "range", "drag", "date_time", "menu_select", "scroll_into_view", "upload_file", "download_wait", "clipboard", "goto", "new_tab", "switch_tab", "close_tab", "dialog") and result.get('ok') is not False:
+        if name in ("act", "type", "clear", "key", "select", "check", "range", "drag", "canvas", "date_time", "menu_select", "scroll_into_view", "upload_file", "download_wait", "clipboard", "goto", "new_tab", "switch_tab", "close_tab", "dialog") and result.get('ok') is not False:
             key = env or ""
             before = self.snapshots.get(key, {})
             try:
@@ -390,7 +393,7 @@ class Bridge:
             return {"ok": False, "error": "no steps"}
         if not isinstance(steps, list) or any(not isinstance(step, dict) or len(step) != 1 for step in steps):
             return {"ok": False, "error": "steps must be an array of single-action objects"}
-        supported = {'observe', 'act', 'type', 'clear', 'key', 'select', 'check', 'range', 'drag', 'dialog', 'clipboard', 'accessibility',
+        supported = {'observe', 'act', 'type', 'clear', 'key', 'select', 'check', 'range', 'drag', 'canvas', 'dialog', 'clipboard', 'accessibility',
                      'date_time', 'menu_select', 'scroll_into_view', 'upload_file',
                      'download_wait', 'goto', 'new_tab', 'switch_tab', 'close_tab', 'clicks', 'batch',
                      'scroll', 'read', 'shot', 'wait', 'wait_for', 'env'}
@@ -830,7 +833,7 @@ def make_handler(bridge: Bridge, token: str):
                             "environment_import_busy": getattr(getattr(getattr(bridge, 'env_management', None), 'imports', None), 'busy', lambda: False)(),
                             "browser_busy": getattr(bridge, 'execution_busy', lambda: False)(),
                             "chat_busy": bool(getattr(bridge.sessions, 'turn_started', None)),
-                            "features": ["observe", "act", "type", "clear", "key", "select", "check", "range", "drag", "dialog", "clipboard", "accessibility", "date_time", "menu_select", "scroll_into_view", "upload_file", "download_wait", "new_tab", "switch_tab", "close_tab", "batch", "targets", "chat", "wait_for"],
+                            "features": ["observe", "act", "type", "clear", "key", "select", "check", "range", "drag", "canvas", "dialog", "clipboard", "accessibility", "date_time", "menu_select", "scroll_into_view", "upload_file", "download_wait", "new_tab", "switch_tab", "close_tab", "batch", "targets", "chat", "wait_for"],
                             "backend": "cdp", "preset": bridge.permissions.get("preset")})
             elif self.path in ('/v1/lan/manage/openapi', '/v1/lan/manage/catalog'):
                 from environment_api import openapi, catalogue

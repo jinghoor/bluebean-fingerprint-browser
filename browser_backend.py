@@ -1180,6 +1180,104 @@ class BrowserBackend:
         return {'ok':True,'from':from_id,'to':to_id,'at':[tx,ty],
                 'duration_ms':duration_ms,'trusted':True}
 
+    def canvas_action(self, env: str | None, action: str,
+                      selector: str | None = None, point: list[float] | None = None,
+                      from_point: list[float] | None = None,
+                      to_point: list[float] | None = None,
+                      text: str | None = None, replace: bool = False,
+                      delta_y: float = 0, duration_ms: int = 300,
+                      modifiers: list[str] | None = None) -> dict:
+        """Drive a canvas editor with real pointer paths and keyboard input.
+
+        Coordinates are viewport CSS pixels by default. With selector they are
+        local to the selected canvas or board element.
+        """
+        allowed = {'connect','disconnect','edit','cancel','pan','zoom','select','move'}
+        if action not in allowed:
+            return {'ok':False,'error_code':'INVALID_CANVAS_ACTION',
+                    'error':'canvas.action must be connect, disconnect, edit, cancel, pan, zoom, select, or move.'}
+        cdp = self._cdp(env)
+        def resolve(value):
+            if value is None:
+                return None
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                raise ValueError('canvas points must be [x, y]')
+            raw = cdp.evaluate("JSON.stringify((() => { const el=" +
+                ("document.querySelector(" + json.dumps(selector) + ")" if selector else "null") +
+                "; if(!el) return {x:0,y:0}; const r=el.getBoundingClientRect(); return {x:r.left,y:r.top}; })())", timeout=5) if selector else None
+            origin = json.loads(raw or '{"x":0,"y":0}') if raw else {'x':0,'y':0}
+            return [float(value[0]) + float(origin.get('x',0)), float(value[1]) + float(origin.get('y',0))]
+        try:
+            point = resolve(point)
+            from_point = resolve(from_point)
+            to_point = resolve(to_point)
+        except (TypeError, ValueError) as exc:
+            return {'ok':False,'error_code':'INVALID_CANVAS_POINT','error':str(exc)}
+        if action in {'connect','pan','move'} and (not from_point or not to_point):
+            return {'ok':False,'error_code':'CANVAS_POINTS_REQUIRED',
+                    'error':'This canvas action requires from_point and to_point.'}
+        if action in {'edit','disconnect','select','zoom'} and not point:
+            return {'ok':False,'error_code':'CANVAS_POINT_REQUIRED',
+                    'error':'This canvas action requires point.'}
+        def mouse(kind, x, y, button='none', count=1, mods=0):
+            cdp.send('Input.dispatchMouseEvent', {'type':kind,'x':x,'y':y,
+                'button':button,'clickCount':count,'modifiers':mods})
+        def move_path(start, end, button='left'):
+            steps=max(2,min(40,int(max(40,duration_ms)/16)))
+            for index in range(1,steps+1):
+                progress=index/steps
+                x=start[0]+(end[0]-start[0])*progress
+                y=start[1]+(end[1]-start[1])*progress
+                self.cursor_event(env,x,y,'canvas')
+                mouse('mouseMoved',x,y,button)
+                time.sleep(max(.001,duration_ms/1000/steps))
+        mods=0
+        for token in modifiers or []:
+            try: mods |= self._key_definition(token)[3]
+            except ValueError: pass
+        if action == 'connect' or action == 'move':
+            self.cursor_event(env,from_point[0],from_point[1],'canvas')
+            mouse('mouseMoved',from_point[0],from_point[1], 'none', 1, mods)
+            mouse('mousePressed',from_point[0],from_point[1], 'left', 1, mods)
+            move_path(from_point,to_point,'left')
+            mouse('mouseReleased',to_point[0],to_point[1], 'left', 1, mods)
+        elif action == 'pan':
+            self.cursor_event(env,from_point[0],from_point[1],'canvas')
+            mouse('mouseMoved',from_point[0],from_point[1], 'none', 1, mods)
+            mouse('mousePressed',from_point[0],from_point[1], 'middle', 1, mods)
+            move_path(from_point,to_point,'middle')
+            mouse('mouseReleased',to_point[0],to_point[1], 'middle', 1, mods)
+        elif action == 'zoom':
+            self.cursor_event(env,point[0],point[1],'canvas')
+            mouse('mouseMoved',point[0],point[1], 'none', 1, mods)
+            cdp.send('Input.dispatchMouseEvent', {'type':'mouseWheel','x':point[0],'y':point[1],
+                'deltaX':0,'deltaY':float(delta_y),'modifiers':mods})
+        elif action == 'select':
+            self.cursor_event(env,point[0],point[1],'canvas')
+            mouse('mouseMoved',point[0],point[1], 'none', 1, mods)
+            mouse('mousePressed',point[0],point[1], 'left', 1, mods)
+            mouse('mouseReleased',point[0],point[1], 'left', 1, mods)
+        elif action == 'disconnect':
+            self.cursor_event(env,point[0],point[1],'canvas')
+            mouse('mouseMoved',point[0],point[1], 'none', 1, mods)
+            mouse('mousePressed',point[0],point[1], 'left', 1, mods)
+            mouse('mouseReleased',point[0],point[1], 'left', 1, mods)
+            self._dispatch_keys(cdp,['DELETE'])
+        elif action == 'edit':
+            self.cursor_event(env,point[0],point[1],'canvas')
+            mouse('mouseMoved',point[0],point[1], 'none', 2, mods)
+            mouse('mousePressed',point[0],point[1], 'left', 2, mods)
+            mouse('mouseReleased',point[0],point[1], 'left', 2, mods)
+            if replace:
+                self._dispatch_keys(cdp,['CTRL+A','BACKSPACE'])
+            if text is not None:
+                for char in text:
+                    cdp.send('Input.dispatchKeyEvent',{'type':'char','text':char})
+        elif action == 'cancel':
+            self._dispatch_keys(cdp,['ESC'])
+        return {'ok':True,'action':action,'trusted':True,
+                'point':point,'from_point':from_point,'to_point':to_point}
+
     def scroll_into_view(self, env: str | None, element_id: str | None = None,
                          selector: str | None = None) -> dict:
         resolved_env = env or self.env_state().get("active", "")
