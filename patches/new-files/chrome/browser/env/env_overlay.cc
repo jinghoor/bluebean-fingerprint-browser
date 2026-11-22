@@ -5,6 +5,7 @@
 #include "chrome/browser/env/env_overlay.h"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <optional>
@@ -98,21 +99,41 @@ class EnvAutomationCursorView : public views::View {
   EnvAutomationCursorView& operator=(const EnvAutomationCursorView&) = delete;
   ~EnvAutomationCursorView() override = default;
 
-  void ShowAt(const gfx::PointF& target, std::string action) {
+  int ShowAt(const gfx::PointF& target, std::string action) {
     const base::TimeTicks now = base::TimeTicks::Now();
     from_ = visible_ ? position_ : target;
     target_ = target;
     position_ = from_;
     action_ = std::move(action);
+    const float dx = target_.x() - from_.x();
+    const float dy = target_.y() - from_.y();
+    const float distance = std::sqrt(dx * dx + dy * dy);
+    if (distance > 4.0f) {
+      const float inverse_distance = 1.0f / distance;
+      const float normal_x = -dy * inverse_distance;
+      const float normal_y = dx * inverse_distance;
+      const float arc = std::clamp(distance * 0.16f, 14.0f, 92.0f);
+      arc_side_ = -arc_side_;
+      control_ = gfx::PointF(
+          (from_.x() + target_.x()) * 0.5f + normal_x * arc * arc_side_,
+          (from_.y() + target_.y()) * 0.5f + normal_y * arc * arc_side_);
+    } else {
+      control_ = gfx::PointF((from_.x() + target_.x()) * 0.5f,
+                             (from_.y() + target_.y()) * 0.5f);
+    }
     started_ = now;
-    duration_ = action_ == "click" ? base::Milliseconds(70)
-                                   : base::Milliseconds(90);
+    const int duration_ms = distance <= 4.0f
+                                ? (action_ == "click" ? 80 : 100)
+                                : std::clamp(140 + static_cast<int>(distance * 0.22f),
+                                             170, 460);
+    duration_ = base::Milliseconds(duration_ms);
     visible_ = true;
     SetVisible(true);
     timer_.Start(FROM_HERE, base::Milliseconds(16),
                  base::BindRepeating(&EnvAutomationCursorView::Animate,
                                      weak_factory_.GetWeakPtr()));
     SchedulePaint();
+    return duration_ms;
   }
 
   void HideCursor() {
@@ -139,12 +160,6 @@ class EnvAutomationCursorView : public views::View {
     canvas->DrawCircle(gfx::PointF(p.x() + 1.0f, p.y() + 2.0f), 8.0f,
                        shadow);
 
-    cc::PaintFlags core;
-    core.setAntiAlias(true);
-    core.setStyle(cc::PaintFlags::kFill_Style);
-    core.setColor(SkColorSetARGB(245, 37, 116, 219));
-    canvas->DrawCircle(p, 6.0f, core);
-
     cc::PaintFlags ring;
     ring.setAntiAlias(true);
     ring.setStyle(cc::PaintFlags::kStroke_Style);
@@ -155,6 +170,39 @@ class EnvAutomationCursorView : public views::View {
                                  action_ == "error" ? 76 : 250));
     canvas->DrawCircle(p, 11.0f + pulse * (action_ == "click" ? 15.0f : 4.0f),
                        ring);
+
+    auto pointer_path = [](const gfx::PointF& origin, float dx,
+                           float dy) {
+      SkPathBuilder path;
+      path.moveTo(origin.x() + dx, origin.y() + dy);
+      path.lineTo(origin.x() + dx + 23.0f, origin.y() + dy + 13.0f);
+      path.lineTo(origin.x() + dx + 12.0f, origin.y() + dy + 15.0f);
+      path.lineTo(origin.x() + dx + 18.0f, origin.y() + dy + 29.0f);
+      path.lineTo(origin.x() + dx + 10.0f, origin.y() + dy + 33.0f);
+      path.lineTo(origin.x() + dx + 4.0f, origin.y() + dy + 19.0f);
+      path.lineTo(origin.x() + dx - 4.0f, origin.y() + dy + 26.0f);
+      path.close();
+      return path.detach();
+    };
+
+    cc::PaintFlags pointer_shadow;
+    pointer_shadow.setAntiAlias(true);
+    pointer_shadow.setStyle(cc::PaintFlags::kFill_Style);
+    pointer_shadow.setColor(SkColorSetARGB(90, 15, 23, 42));
+    canvas->DrawPath(pointer_path(p, 2.0f, 3.0f), pointer_shadow);
+
+    cc::PaintFlags pointer_fill;
+    pointer_fill.setAntiAlias(true);
+    pointer_fill.setStyle(cc::PaintFlags::kFill_Style);
+    pointer_fill.setColor(SK_ColorWHITE);
+    canvas->DrawPath(pointer_path(p, 0.0f, 0.0f), pointer_fill);
+
+    cc::PaintFlags pointer_outline;
+    pointer_outline.setAntiAlias(true);
+    pointer_outline.setStyle(cc::PaintFlags::kStroke_Style);
+    pointer_outline.setStrokeWidth(1.7f);
+    pointer_outline.setColor(SkColorSetARGB(245, 15, 23, 42));
+    canvas->DrawPath(pointer_path(p, 0.0f, 0.0f), pointer_outline);
 
     if (action_ == "scroll") {
       cc::PaintFlags scroll;
@@ -173,10 +221,16 @@ class EnvAutomationCursorView : public views::View {
         static_cast<float>((base::TimeTicks::Now() - started_).InMicroseconds()) /
             static_cast<float>(duration_.InMicroseconds()),
         0.0f, 1.0f);
+    // Smoothstep gives the pointer acceleration at launch and deceleration at
+    // arrival. The quadratic control point adds the visible arc between
+    // commands without changing the input coordinates sent to the page.
     const float eased = raw * raw * (3.0f - 2.0f * raw);
+    const float inverse = 1.0f - eased;
     position_ = gfx::PointF(
-        from_.x() + (target_.x() - from_.x()) * eased,
-        from_.y() + (target_.y() - from_.y()) * eased);
+        inverse * inverse * from_.x() + 2.0f * inverse * eased * control_.x() +
+            eased * eased * target_.x(),
+        inverse * inverse * from_.y() + 2.0f * inverse * eased * control_.y() +
+            eased * eased * target_.y());
     if (raw >= 1.0f) {
       timer_.Stop();
       position_ = target_;
@@ -185,11 +239,13 @@ class EnvAutomationCursorView : public views::View {
   }
 
   gfx::PointF from_;
+  gfx::PointF control_;
   gfx::PointF target_;
   gfx::PointF position_;
   std::string action_ = "move";
   base::TimeTicks started_;
   base::TimeDelta duration_ = base::Milliseconds(90);
+  float arc_side_ = 1.0f;
   bool visible_ = false;
   base::RepeatingTimer timer_;
   base::WeakPtrFactory<EnvAutomationCursorView> weak_factory_{this};
@@ -342,15 +398,15 @@ class EnvOverlayHost : public views::View,
   }
   bool IsLayerShown() const { return web_view_ && web_view_->GetVisible() && !shrunk_; }
 
-  void SetAutomationCursor(const std::string& env_id, float x, float y,
-                           const std::string& action) {
+  int SetAutomationCursor(const std::string& env_id, float x, float y,
+                          const std::string& action) {
     if (!cursor_view_ || !manager_) {
-      return;
+      return 0;
     }
     active_env_id_ = manager_->active_env_id();
     if (env_id != active_env_id_) {
       cursor_states_[env_id] = gfx::PointF(x, y);
-      return;
+      return 0;
     }
     cursor_states_[env_id] = gfx::PointF(x, y);
     // NativeViewHost may add a compositor child after the overlay view. Keep
@@ -360,7 +416,7 @@ class EnvOverlayHost : public views::View,
       browser_view_->ReorderChildView(cursor_view_,
                                       browser_view_->children().size());
     }
-    cursor_view_->ShowAt(PagePointToViewPoint(gfx::PointF(x, y)), action);
+    return cursor_view_->ShowAt(PagePointToViewPoint(gfx::PointF(x, y)), action);
   }
 
   void HideAutomationCursor() {
@@ -1215,20 +1271,20 @@ std::string OverlayGeometry(BrowserWindowInterface* window) {
   return host ? host->Describe() : "none";
 }
 
-bool UpdateAutomationCursor(Profile* profile, const std::string& env_id,
-                            float x, float y, const std::string& action) {
+int UpdateAutomationCursor(Profile* profile, const std::string& env_id,
+                           float x, float y, const std::string& action) {
   if (!profile) {
-    return false;
+    return 0;
   }
   for (const auto& [browser_view, host] : Hosts()) {
     if (browser_view && browser_view->GetProfile() == profile && host) {
-      host->SetAutomationCursor(env_id, x, y, action);
+      const int duration_ms = host->SetAutomationCursor(env_id, x, y, action);
       LOG(ERROR) << "ENVCURSOR: env=" << env_id << " action=" << action
                  << " x=" << x << " y=" << y;
-      return true;
+      return duration_ms;
     }
   }
-  return false;
+  return 0;
 }
 
 bool HideAutomationCursor(Profile* profile) {

@@ -155,9 +155,15 @@ try:
     command({"command": "panel"})
     wait(lambda: "layer=1" in command({"command": "overlay", "query": True}).get("geometry", ""))
     report["checks"].append("native_overlay_mounted")
+    first_motion = send_cursor("move", 120, 120)
+    long_motion = send_cursor("move", 820, 520)
+    assert first_motion.get("cursor_ms", 0) >= 100, first_motion
+    assert long_motion.get("cursor_ms", 0) >= 170, long_motion
+    report["checks"].append("distance_based_accelerated_arc_duration")
     for action, x, y in (("move", 180, 220), ("click", 260, 340), ("type", 330, 410), ("scroll", 420, 500)):
         reply = send_cursor(action, x, y)
         assert reply.get("ok"), reply
+        assert reply.get("cursor_ms", 0) >= 80, reply
     report["checks"].append("move_click_type_scroll_accepted_by_native_socket")
     log = (OUT / "chrome.log").read_text(encoding="utf-8", errors="replace")
     for action in ("move", "click", "type", "scroll"):

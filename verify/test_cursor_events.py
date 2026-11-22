@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from browser_backend import BrowserBackend
 
@@ -47,6 +48,21 @@ class CursorEventTest(unittest.TestCase):
             backend.kernel_available = lambda: False
             backend.kernel_task = lambda *args, **kwargs: self.fail("stale port must not be retried")
             self.assertFalse(backend.cursor_event("env-1", 1, 2))
+
+    def test_cursor_event_waits_for_native_motion_before_next_action(self):
+        backend = BrowserBackend()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backend.KERNEL_PORT_FILE = root / "port"
+            backend.KERNEL_TOKEN_FILE = root / "token"
+            backend.KERNEL_PORT_FILE.write_text("1234", encoding="utf-8")
+            backend.KERNEL_TOKEN_FILE.write_text("test", encoding="utf-8")
+            backend.kernel_available = lambda: True
+            backend.kernel_task = lambda *args, **kwargs: {
+                "ok": True, "cursor_ms": 180, "wall_ms": 35}
+            with patch("browser_backend.time.sleep") as sleep:
+                self.assertTrue(backend.cursor_event("env-1", 80, 90, "click"))
+            sleep.assert_called_once_with(0.145)
 
 
 if __name__ == "__main__":

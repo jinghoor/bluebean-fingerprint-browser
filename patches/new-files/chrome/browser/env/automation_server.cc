@@ -195,14 +195,15 @@ void AutomationServer::HandleLine(const std::string& line) {
     return;
   }
 
+  int cursor_ms = 0;
   if (const base::DictValue* cursor = request.FindDict("cursor")) {
     const double x = cursor->FindDouble("x").value_or(0);
     const double y = cursor->FindDouble("y").value_or(0);
     const std::string action = cursor->FindString("action")
                                    ? *cursor->FindString("action")
                                    : "move";
-    UpdateAutomationCursor(profile_, *env_id, static_cast<float>(x),
-                            static_cast<float>(y), action);
+    cursor_ms = UpdateAutomationCursor(profile_, *env_id, static_cast<float>(x),
+                                       static_cast<float>(y), action);
   }
   if (!raw_ops) {
     return;
@@ -250,7 +251,8 @@ void AutomationServer::HandleLine(const std::string& line) {
     task_->ClickTrusted(
         *env_id, std::move(trusted_selectors),
         base::BindOnce(
-            [](base::WeakPtr<AutomationServer> self, mojom::TaskResultPtr result) {
+            [](base::WeakPtr<AutomationServer> self, int cursor_ms,
+               mojom::TaskResultPtr result) {
               if (!self || !self->client_socket_) {
                 return;
               }
@@ -260,6 +262,7 @@ void AutomationServer::HandleLine(const std::string& line) {
                 reply.Set("error", result->error);
               }
               reply.Set("ms", result->ms);
+              reply.Set("cursor_ms", cursor_ms);
               base::ListValue op_results;
               for (const mojom::OpResultPtr& op_result : result->results) {
                 base::DictValue entry;
@@ -280,13 +283,14 @@ void AutomationServer::HandleLine(const std::string& line) {
               self->client_socket_.reset();
               self->DoAccept();
             },
-            weak_factory_.GetWeakPtr()));
+            weak_factory_.GetWeakPtr(), cursor_ms));
     return;
   }
   task_->RunTask(
       *env_id, std::move(ops),
       base::BindOnce(
-          [](base::WeakPtr<AutomationServer> self, mojom::TaskResultPtr result) {
+          [](base::WeakPtr<AutomationServer> self, int cursor_ms,
+             mojom::TaskResultPtr result) {
             if (!self || !self->client_socket_) {
               return;
             }
@@ -296,6 +300,7 @@ void AutomationServer::HandleLine(const std::string& line) {
               reply.Set("error", result->error);
             }
             reply.Set("ms", result->ms);
+            reply.Set("cursor_ms", cursor_ms);
             reply.Set("url", result->page_url);
             base::ListValue op_results;
             for (const mojom::OpResultPtr& op_result : result->results) {
@@ -317,7 +322,7 @@ void AutomationServer::HandleLine(const std::string& line) {
             self->client_socket_.reset();
             self->DoAccept();
           },
-          weak_factory_.GetWeakPtr()));
+          weak_factory_.GetWeakPtr(), cursor_ms));
 }
 
 }  // namespace env

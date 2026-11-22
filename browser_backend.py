@@ -695,6 +695,14 @@ class BrowserBackend:
             reply = self.kernel_task(env, [], timeout=1.5,
                                      cursor={"x": float(x), "y": float(y),
                                              "action": action})
+            # The native layer starts the arc before replying. Wait only for
+            # the remaining animation time so the following click, key input,
+            # or wheel event lands after the pointer reaches its target.
+            cursor_ms = float(reply.get("cursor_ms", 0) or 0)
+            elapsed_ms = float(reply.get("wall_ms", 0) or 0)
+            remaining_ms = max(0.0, cursor_ms - elapsed_ms)
+            if remaining_ms:
+                time.sleep(remaining_ms / 1000.0)
             return bool(reply.get("ok", True))
         except Exception:
             self._kernel_probe = (time.monotonic(), False)
