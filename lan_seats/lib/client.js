@@ -865,6 +865,118 @@ window.__ModuleLoader__.load({
       }
     }
 
+    function ConversationDockToggle({ sessionId }) {
+      const [docked, setDocked] = React.useState(() => {
+        try { return localStorage.getItem('lan-conversation-dock-v1') === 'right'; } catch { return false; }
+      });
+      const [mode, setMode] = React.useState(() => {
+        try { return localStorage.getItem('lan-conversation-dock-mode-v1') === 'fixed' ? 'fixed' : 'floating'; } catch { return 'floating'; }
+      });
+      const emit = (next, nextMode = mode) => {
+        const sidebar = Math.round(document.querySelector('.mP3x-q_sidebarCol')?.getBoundingClientRect().width || 280);
+        // Keep a usable chat column on smaller windows without letting it
+        // consume the whole page. The native host accepts the same range.
+        const conversation = Math.min(420, Math.max(260, Math.round(innerWidth * .34)));
+        const value = String(next);
+        const modeValue = nextMode === 'fixed' ? 'fixed' : 'floating';
+        const alreadySynchronized =
+          document.documentElement.dataset.lanConversationDocked === value &&
+          document.documentElement.dataset.lanConversationDockMode === modeValue &&
+          document.documentElement.dataset.lanConversationDockedReady === 'true';
+        document.documentElement.style.setProperty('--lan-sidebar-width', sidebar + 'px');
+        document.documentElement.style.setProperty('--lan-conversation-width', conversation + 'px');
+        // The native host uses the same flag to expose only the left sidebar
+        // and right conversation as input surfaces. Set it before notifying
+        // Chromium so the middle can become transparent in the same frame.
+        document.documentElement.dataset.lanConversationDocked = value;
+        document.documentElement.dataset.lanConversationDockMode = modeValue;
+        document.documentElement.dataset.lanConversationDockedReady = 'true';
+        try { localStorage.setItem('lan-conversation-dock-v1', next ? 'right' : 'overlay'); } catch {}
+        try { localStorage.setItem('lan-conversation-dock-mode-v1', modeValue); } catch {}
+        // Switching sessions remounts this header action. Avoid sending a
+        // second native relayout when the host is already in the requested
+        // mode, while still notifying it after a page reload.
+        if (alreadySynchronized) return;
+        console.info('LAN_OVERLAY_UI:' + JSON.stringify({
+          action: next ? 'dock' : 'undock', sidebar_width: sidebar,
+          conversation_width: conversation, fixed_right: next && modeValue === 'fixed',
+          dock_mode: modeValue, session_id: sessionId || ''
+        }));
+      };
+      React.useEffect(() => {
+        const next = docked;
+        const id = requestAnimationFrame(() => emit(next));
+        return () => cancelAnimationFrame(id);
+      }, []);
+      const toggle = () => {
+        const next = !docked;
+        setDocked(next);
+        emit(next, mode);
+      };
+      const toggleMode = () => {
+        if (!docked) return;
+        const next = mode === 'fixed' ? 'floating' : 'fixed';
+        setMode(next);
+        emit(true, next);
+      };
+      const modeLabel = mode === 'fixed' ? '固定插入' : '悬浮';
+      const modeAction = mode === 'fixed' ? '切换为悬浮' : '切换为固定插入';
+      return h('span', { style: { display: 'inline-flex', alignItems: 'center' } },
+        h('button', {
+          type: 'button', className: 'lan-conversation-dock-toggle',
+          'aria-label': docked ? '恢复会话框原状' : '将会话框停靠到网页右侧',
+          'aria-pressed': docked, title: docked ? '恢复会话框原状' : '网页三列布局',
+          onClick: toggle,
+        }, h('svg', { viewBox: '0 0 20 20', fill: 'none', 'aria-hidden': true },
+          h('rect', { x: 2.5, y: 3, width: 15, height: 14, rx: 1.8, stroke: 'currentColor', strokeWidth: 1.4 }),
+          docked
+            ? h('path', { d: 'M7 3v14M13 7l-2 3 2 3', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round' })
+            : h('path', { d: 'M13 3v14M11 7l2 3-2 3', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round' })
+        )),
+        docked && h('button', {
+          type: 'button', className: 'lan-conversation-dock-mode-toggle',
+          'aria-label': `当前为${modeLabel}，${modeAction}`,
+          title: `当前：${modeLabel}，点击${modeAction}`,
+          onClick: toggleMode,
+        }, h('svg', { viewBox: '0 0 20 20', fill: 'none', 'aria-hidden': true },
+          mode === 'fixed'
+            ? h('path', { d: 'M4 4h12v12H4zM7 7h6v6H7z', stroke: 'currentColor', strokeWidth: 1.4, strokeLinejoin: 'round' })
+            : h('path', { d: 'M3 5h14v10H3zM6 3h8M6 17h8', stroke: 'currentColor', strokeWidth: 1.4, strokeLinejoin: 'round' })
+        )));
+    }
+
+    function installConversationDockToggle(ctx) {
+      ctx.effect(() => {
+        const style = document.createElement('style');
+        style.id = 'lan-conversation-dock-style';
+        style.textContent = `
+          .lan-conversation-dock-toggle{display:inline-grid;place-items:center;width:28px;height:28px;margin:0 4px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-text-secondary,#687386);cursor:pointer}
+          .lan-conversation-dock-mode-toggle{display:inline-grid;place-items:center;width:28px;height:28px;margin:0 2px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-text-secondary,#687386);cursor:pointer}
+          .lan-conversation-dock-toggle:hover{background:var(--dsw-alias-fill-secondary,#eef2f7);color:var(--dsw-alias-text-primary,#1f2937)}
+          .lan-conversation-dock-mode-toggle:hover{background:var(--dsw-alias-fill-secondary,#eef2f7);color:var(--dsw-alias-text-primary,#1f2937)}
+          .lan-conversation-dock-toggle:focus-visible{outline:2px solid var(--dsw-alias-text-accent,#2367df);outline-offset:1px}
+          .lan-conversation-dock-mode-toggle:focus-visible{outline:2px solid var(--dsw-alias-text-accent,#2367df);outline-offset:1px}
+          html[data-lan-conversation-docked=true],html[data-lan-conversation-docked=true] body{background:transparent!important;overflow:hidden!important}
+          html[data-lan-conversation-docked=true] .mP3x-q_frame{background:transparent!important}
+          html[data-lan-conversation-docked=true] .GAkraW_root{position:relative!important;display:block!important;width:100%!important;height:100%!important;min-width:100%!important;overflow:hidden!important;background:transparent!important}
+          html[data-lan-conversation-docked=true] .mP3x-q_sidebarCol{position:absolute!important;inset:0 auto 0 0!important;width:var(--lan-sidebar-width,280px)!important;min-width:var(--lan-sidebar-width,280px)!important;max-width:var(--lan-sidebar-width,280px)!important;border-radius:0!important;background:var(--dsw-alias-background-primary,#fff)!important;z-index:3!important}
+          html[data-lan-conversation-docked=true] .mP3x-q_centerCol{position:absolute!important;inset:0 0 0 auto!important;width:var(--lan-conversation-width,360px)!important;min-width:0!important;max-width:var(--lan-conversation-width,360px)!important;box-sizing:border-box!important;overflow:hidden!important;background:var(--dsw-alias-background-primary,#fff)!important;box-shadow:-8px 0 24px -10px rgba(15,23,42,.26)!important;border-left:1px solid rgba(15,23,42,.10)!important;border-radius:0!important;z-index:3!important}
+          @media(prefers-reduced-motion:reduce){.lan-conversation-dock-toggle{transition:none}}
+        `;
+        (document.head || document.documentElement).append(style);
+        return () => {
+          style.remove();
+          delete document.documentElement.dataset.lanConversationDocked;
+          delete document.documentElement.dataset.lanConversationDockMode;
+          delete document.documentElement.dataset.lanConversationDockedReady;
+        };
+      }, 'lan-seats: right conversation dock');
+      ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register(
+        { name: 'conversation.session.header.actions', id: 'lan-conversation-dock-toggle', order: 90 },
+        props => h(ConversationDockToggle, { ...props, key: props.sessionId || 'lan-dock' })
+      ));
+    }
+
     function installSidebarEnvSwitcher(ctx) {
       ctx.effect(() => {
         const style = document.createElement('style');
@@ -1148,6 +1260,7 @@ window.__ModuleLoader__.load({
       installProductInfo(ctx);
       installOverlayHost(ctx);
       installEnvScopePicker(ctx);
+      installConversationDockToggle(ctx);
       installSidebarEnvSwitcher(ctx);
 
       if (ctx.slots && typeof ctx.slots.inject === 'function') {

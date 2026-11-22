@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add a right-side conversation dock for “我的环境” with floating and fixed-insert modes.
+- Keep the DSH sidebar and conversation interactive while the middle browser page remains visible and clickable.
+- Keep custom development profiles aligned across the browser, bridge, and environment services.
+
 ## 1.0.6 - 2026-11-12
 
 - 网络代理使用 IP、端口、用户、密码四字段，支持粘贴自动拆分；凭据通过 Windows DPAPI 保存在本机。

@@ -58,6 +58,13 @@ bool SetOverlayWidth(BrowserWindowInterface* window, int width);
 bool CollapseOverlayToRail(BrowserWindowInterface* window);
 bool ExpandOverlayFromRail(BrowserWindowInterface* window);
 
+// Put the assistant's sidebar at the left edge and its conversation at the
+// right edge, leaving the browser page visible between them. The workbench
+// remains one WebContents and the mode is driven by the product plugin.
+bool DockOverlayToRight(BrowserWindowInterface* window, int conversation_width,
+                        bool fixed_right = false);
+bool UndockOverlayFromRight(BrowserWindowInterface* window);
+
 // Entry point used by the browser command (toolbar button and Ctrl+Shift+W): shows the layer on the
 // workbench, or hides it when it is already visible. The workbench URL is read from the state file
 // the bridge maintains, so the command needs no Python round trip.

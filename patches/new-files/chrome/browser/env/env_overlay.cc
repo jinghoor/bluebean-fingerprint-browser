@@ -28,7 +28,9 @@
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "url/origin.h"
@@ -38,6 +40,7 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/compositor/layer.h"
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/canvas.h"
@@ -178,6 +181,10 @@ class EnvOverlayHost : public views::View,
   void OnViewBoundsChanged(views::View* observed_view) override;
   void OnViewHierarchyWillBeDeleted(views::View* observed_view) override;
 
+  // Reapply the compositor transparency after the embedded workbench creates
+  // or replaces its renderer view during a navigation.
+  void DidFinishNavigation(content::NavigationHandle* navigation_handle) override;
+
   void InstallClickAway(aura::Window* event_window);
   void SetPageWindow(aura::Window* page_window) { page_window_ = page_window; }
 
@@ -220,6 +227,33 @@ class EnvOverlayHost : public views::View,
     LayoutContents();
   }
 
+  void SetDocked(bool docked, int conversation_width, bool fixed_right) {
+    docked_right_ = docked;
+    fixed_right_ = docked && fixed_right;
+    // Docking is an expanded presentation. If the user had previously folded
+    // the conversation into the rail, restore the full workbench before
+    // placing its two visible columns at the edges.
+    if (docked) {
+      collapsed_ = false;
+    }
+    if (conversation_width >= 240 && conversation_width <= 720) {
+      conversation_width_ = conversation_width;
+    }
+    SetPageBackground(docked);
+    WriteLayerStateFile();
+    LayoutContents();
+    if (browser_view_) {
+      browser_view_->InvalidateLayout();
+      if (views::Widget* widget = browser_view_->GetWidget()) {
+        widget->LayoutRootViewIfNecessary();
+      }
+    }
+    SchedulePaint();
+  }
+
+  bool docked_right() const { return docked_right_; }
+  bool fixed_right() const { return fixed_right_; }
+
   void SetShrunk(bool shrunk);
   // Clicking the page no longer hides the layer: it folds back to the session rail, and whatever is running keeps
   // running (measured requirement: "clicking blank space makes it disappear but the task continues").
@@ -237,15 +271,22 @@ class EnvOverlayHost : public views::View,
   void LayoutContents();
   gfx::Rect ContentAreaInParent() const;
   gfx::Rect VisibleCardBounds() const;
+  gfx::Rect DockedSidebarBounds() const;
+  gfx::Rect DockedConversationBounds() const;
+  bool IsInteractivePoint(const gfx::Point& point) const;
+  bool IntersectsInteractiveRegion(const gfx::Rect& rect) const;
+  void SetPageBackground(bool transparent);
   void ApplyPageAction(std::string action, int sidebar_width,
-                       bool shell_ready, bool modal_visible);
+                       int conversation_width, bool fixed_right,
+                       bool shell_ready,
+                       bool modal_visible);
   bool FullViewportVisible() const {
     return bootstrap_visible_ || modal_visible_ || !collapsed_;
   }
 
   bool DoesIntersectRect(const views::View* target,
                          const gfx::Rect& rect) const override {
-    return VisibleCardBounds().Intersects(rect);
+    return IntersectsInteractiveRegion(rect);
   }
 
   void OnDidAddMessageToConsole(
@@ -281,6 +322,9 @@ class EnvOverlayHost : public views::View,
   int reserved_width_ = 0;
   gfx::Rect full_content_bounds_;
   int width_override_ = 0;
+  bool docked_right_ = false;
+  bool fixed_right_ = false;
+  int conversation_width_ = 360;
   GURL url_;
   base::WeakPtrFactory<EnvOverlayHost> weak_factory_{this};
 };
@@ -341,8 +385,9 @@ EnvOverlayHost::EnvOverlayHost(content::BrowserContext* context,
                        std::make_unique<base::SupportsUserData::Data>());
   contents->GetController().LoadURL(url, content::Referrer(),
                                     ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
-  // Opaque base: the workbench relies on it to paint the sidebar's surface. Making it transparent (tried for the freed
-  // collapse area) also made the sidebar show the page through it, which is worse than an empty white space.
+  // The normal overlay is opaque. Dock mode switches this to transparent so
+  // the single WebContents can expose the browser page through its middle
+  // column while keeping its own sidebar and conversation surfaces opaque.
   contents->SetPageBaseBackgroundColor(SK_ColorWHITE);
   web_view_->SetOwnedWebContents(std::move(contents));
   Observe(web_view_->GetWebContents());
@@ -399,6 +444,15 @@ void EnvOverlayHost::OnViewHierarchyWillBeDeleted(views::View* observed_view) {
   }
 }
 
+void EnvOverlayHost::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  if (!navigation_handle || !navigation_handle->IsInPrimaryMainFrame()) {
+    return;
+  }
+  SetPageBackground(docked_right_);
+  LayoutContents();
+}
+
 gfx::Rect EnvOverlayHost::ContentAreaInParent() const {
   if (!browser_view_ || !content_area_) {
     return gfx::Rect();
@@ -422,11 +476,16 @@ gfx::Rect EnvOverlayHost::ReserveContentBounds(const gfx::Rect& bounds) {
   reserved_width_ = IsLayerShown()
       ? std::min(sidebar_width_ + kMargin * 2, std::max(0, bounds.width() - 200))
       : 0;
+  const int right_reserved =
+      IsLayerShown() && docked_right_ && fixed_right_ && FullViewportVisible()
+          ? std::min(conversation_width_,
+                     std::max(0, bounds.width() - reserved_width_ - 200))
+          : 0;
   if (area_changed) {
     LayoutContents();
   }
   gfx::Rect page = bounds;
-  page.Inset(gfx::Insets::TLBR(0, reserved_width_, 0, 0));
+  page.Inset(gfx::Insets::TLBR(0, reserved_width_, 0, right_reserved));
   return page;
 }
 
@@ -441,6 +500,66 @@ gfx::Rect EnvOverlayHost::VisibleCardBounds() const {
   return card;
 }
 
+gfx::Rect EnvOverlayHost::DockedSidebarBounds() const {
+  if (!web_view_) {
+    return gfx::Rect();
+  }
+  const int width = std::min(sidebar_width_, web_view_->width());
+  return gfx::Rect(0, 0, std::max(0, width), web_view_->height());
+}
+
+gfx::Rect EnvOverlayHost::DockedConversationBounds() const {
+  if (!web_view_) {
+    return gfx::Rect();
+  }
+  const int width = std::min(conversation_width_, web_view_->width());
+  return gfx::Rect(std::max(0, web_view_->width() - width), 0,
+                   std::max(0, width), web_view_->height());
+}
+
+bool EnvOverlayHost::IsInteractivePoint(const gfx::Point& point) const {
+  if (docked_right_ && FullViewportVisible()) {
+    return DockedSidebarBounds().Contains(point) ||
+           DockedConversationBounds().Contains(point);
+  }
+  return VisibleCardBounds().Contains(point);
+}
+
+bool EnvOverlayHost::IntersectsInteractiveRegion(const gfx::Rect& rect) const {
+  if (docked_right_ && FullViewportVisible()) {
+    return DockedSidebarBounds().Intersects(rect) ||
+           DockedConversationBounds().Intersects(rect);
+  }
+  return VisibleCardBounds().Intersects(rect);
+}
+
+void EnvOverlayHost::SetPageBackground(bool transparent) {
+  if (!web_view_ || !web_view_->GetWebContents()) {
+    return;
+  }
+  content::WebContents* contents = web_view_->GetWebContents();
+  const SkColor color = transparent ? SK_ColorTRANSPARENT : SK_ColorWHITE;
+  contents->SetPageBaseBackgroundColor(color);
+  if (content::RenderWidgetHostView* view =
+          contents->GetRenderWidgetHostView()) {
+    view->SetBackgroundColor(color);
+  }
+  // NativeViewHost embeds the renderer in an aura child layer. The renderer
+  // background can be transparent while that layer is still advertised as
+  // opaque, which makes the entire dock cover the browser page with white.
+  // Mark both the child and its clipping container non-opaque in dock mode so
+  // the middle really composites with the page below it.
+  if (web_view_->holder()) {
+    if (aura::Window* native = web_view_->holder()->native_view()) {
+      native->layer()->SetFillsBoundsOpaquely(!transparent);
+    }
+    if (aura::Window* container =
+            web_view_->holder()->GetNativeViewContainer()) {
+      container->layer()->SetFillsBoundsOpaquely(!transparent);
+    }
+  }
+}
+
 void EnvOverlayHost::LayoutContents() {
   if (!web_view_) {
     return;
@@ -450,25 +569,35 @@ void EnvOverlayHost::LayoutContents() {
     return;
   }
   const int available = std::max(1, content.width() - kMargin * 2);
-  const int viewport_width = std::min(
-      available, std::max(kMinLayerWidth, width_override_ > 0
+  const int viewport_width = docked_right_
+      ? available
+      : std::min(available, std::max(kMinLayerWidth, width_override_ > 0
           ? width_override_ : content.width() * 2 / 3 - kMargin * 2 - kColumnGap));
   const int height = std::max(1, content.height() - kMargin * 2);
   const int visible_width = FullViewportVisible() ? viewport_width
-                                                : std::min(sidebar_width_, viewport_width);
-  // The viewport stays wide so DSH retains its own full sidebar. Only the
-  // containing View and native surface clip shrink; no page scaling or CSS hide.
+                                                  : std::min(sidebar_width_, viewport_width);
+  // Dock mode keeps the one WebContents over the full content area. Its page
+  // background is transparent and only the two DSH columns are painted, so
+  // the browser page remains visible and interactive in the middle.
+  const int host_width = docked_right_ && FullViewportVisible()
+      ? content.width()
+      : visible_width;
   SetBoundsRect(gfx::Rect(content.x(), content.y(),
-                         (shrunk_ ? 2 : visible_width) + kMargin * 2,
+                         (shrunk_ ? 2 : host_width) + kMargin * 2,
                          content.height()));
   web_view_->SetBounds(kMargin, kMargin, shrunk_ ? 2 : viewport_width,
                        shrunk_ ? 2 : height);
   web_view_->holder()->SetNativeViewClipRect(
-      gfx::Rect(0, 0, shrunk_ ? 2 : visible_width, shrunk_ ? 2 : height));
+      gfx::Rect(0, 0, shrunk_ ? 2 : host_width, shrunk_ ? 2 : height));
   web_view_->holder()->SetNativeViewCornerRadii(
-      !FullViewportVisible() ? gfx::RoundedCornersF()
+      docked_right_ ? gfx::RoundedCornersF()
+      : !FullViewportVisible() ? gfx::RoundedCornersF()
                  : gfx::RoundedCornersF(0, kCornerRadius, kCornerRadius, 0));
   web_view_->holder()->InvalidateLayout();
+  // The renderer view can be recreated after a navigation or a renderer
+  // restart. Reapply the compositor transparency after the native bounds are
+  // laid out so a reload cannot restore an opaque white middle.
+  SetPageBackground(docked_right_);
 }
 
 void EnvOverlayHost::OnPaint(gfx::Canvas* canvas) {
@@ -477,15 +606,22 @@ void EnvOverlayHost::OnPaint(gfx::Canvas* canvas) {
   if (!web_view_ || shrunk_) {
     return;
   }
+  cc::PaintFlags flags;
+  flags.setAntiAlias(true);
+  flags.setStyle(cc::PaintFlags::kFill_Style);
+  flags.setColor(GetColorProvider()->GetColor(kColorToolbar));
+  if (docked_right_ && FullViewportVisible()) {
+    // Keep the middle transparent. The DSH stylesheet supplies the card
+    // surfaces and shadow inside these two native regions.
+    canvas->DrawRect(gfx::RectF(DockedSidebarBounds()), flags);
+    canvas->DrawRect(gfx::RectF(DockedConversationBounds()), flags);
+    return;
+  }
   SkPathBuilder builder;
   builder.addRRect(gfx::RoundedRectToSkRRect(
       VisibleCardBounds(),
       !FullViewportVisible() ? gfx::RoundedCornersF()
                  : gfx::RoundedCornersF(0, kCornerRadius, kCornerRadius, 0)));
-  cc::PaintFlags flags;
-  flags.setAntiAlias(true);
-  flags.setStyle(cc::PaintFlags::kFill_Style);
-  flags.setColor(GetColorProvider()->GetColor(kColorToolbar));
   canvas->DrawPath(builder.detach(), flags);
 }
 
@@ -500,7 +636,7 @@ bool EnvOverlayHost::AllowsNativeEvent(gfx::NativeView child,
   }
   gfx::Point point(root_point);
   views::View::ConvertPointToTarget(GetWidget()->GetRootView(), this, &point);
-  return VisibleCardBounds().Contains(point);
+  return IsInteractivePoint(point);
 }
 
 void EnvOverlayHost::OnDidAddMessageToConsole(
@@ -528,19 +664,28 @@ void EnvOverlayHost::OnDidAddMessageToConsole(
   }
   const auto& value = parsed->GetDict();
   const std::string* action = value.FindString("action");
-  if (!action || (*action != "ready" && *action != "collapse" && *action != "expand")) {
+  if (!action || (*action != "ready" && *action != "collapse" &&
+                  *action != "expand" && *action != "dock" &&
+                  *action != "undock" && *action != "dock-mode")) {
     return;
   }
   const int sidebar_width = value.FindInt("sidebar_width").value_or(0);
+  const int conversation_width =
+      value.FindInt("conversation_width").value_or(0);
+  const bool fixed_right = value.FindBool("fixed_right").value_or(false);
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&EnvOverlayHost::ApplyPageAction,
-                               weak_factory_.GetWeakPtr(), *action, sidebar_width,
+                               weak_factory_.GetWeakPtr(), *action,
+                               sidebar_width, conversation_width,
+                               fixed_right,
                                value.FindBool("shell_ready").value_or(false),
                                value.FindBool("modal_visible").value_or(false)));
 }
 
 void EnvOverlayHost::ApplyPageAction(std::string action, int sidebar_width,
-                                     bool shell_ready, bool modal_visible) {
+                                     int conversation_width, bool fixed_right,
+                                     bool shell_ready,
+                                     bool modal_visible) {
   if (shell_ready) {
     bootstrap_visible_ = false;
   }
@@ -555,6 +700,15 @@ void EnvOverlayHost::ApplyPageAction(std::string action, int sidebar_width,
     CollapseToRail();
   } else if (action == "expand") {
     ExpandFromRail();
+  } else if (action == "dock") {
+    SetDocked(true, conversation_width, fixed_right);
+    SetOverlayVisible(true);
+  } else if (action == "dock-mode") {
+    SetDocked(true, conversation_width, fixed_right);
+    SetOverlayVisible(true);
+  } else if (action == "undock") {
+    SetDocked(false, conversation_width, false);
+    SetOverlayVisible(true);
   } else {
     LayoutContents();
     SchedulePaint();
@@ -594,8 +748,16 @@ void EnvOverlayHost::WriteLayerStateFile() {
   if (!profile) {
     return;
   }
-  const std::string json = std::string("{\"collapsed\": ") + (collapsed_ ? "true" : "false") +
-                           ", \"visible\": " + (IsLayerShown() ? "true" : "false") + "}";
+  const std::string json = std::string("{\"collapsed\": ") +
+                           (collapsed_ ? "true" : "false") +
+                           ", \"visible\": " +
+                           (IsLayerShown() ? "true" : "false") +
+                           ", \"docked_right\": " +
+                           (docked_right_ ? "true" : "false") +
+                           ", \"fixed_right\": " +
+                           (fixed_right_ ? "true" : "false") +
+                           ", \"conversation_width\": " +
+                           base::NumberToString(conversation_width_) + "}";
   base::FilePath path = profile->GetPath().AppendASCII("lan-layer-state.json");
   base::WriteFile(path, json);
 }
@@ -628,7 +790,20 @@ bool EnvOverlayHost::PressLandedOnLayer(const ui::MouseEvent& event) const {
   aura::Window* target = static_cast<aura::Window*>(event.target());
   aura::Window* layer_window =
       (web_view_ && web_view_->holder()) ? web_view_->holder()->native_view() : nullptr;
-  return target && layer_window && (target == layer_window || layer_window->Contains(target));
+  if (!target || !layer_window ||
+      !(target == layer_window || layer_window->Contains(target))) {
+    return false;
+  }
+  if (docked_right_ && FullViewportVisible() && GetWidget()) {
+    gfx::Point point(event.root_location());
+    views::View::ConvertPointToTarget(GetWidget()->GetRootView(), this,
+                                      &point);
+    // The native WebContents spans the whole window in dock mode. Treat the
+    // transparent middle as page input even when the pre-target event still
+    // reports the overlay's native window as its target.
+    return IsInteractivePoint(point);
+  }
+  return true;
 }
 
 bool EnvOverlayHost::PressLandedOnPage(const ui::MouseEvent& event) const {
@@ -653,6 +828,9 @@ std::string EnvOverlayHost::Describe() const {
                      " collapsed=" + base::NumberToString(collapsed_ ? 1 : 0) +
                      " bootstrap=" + base::NumberToString(bootstrap_visible_ ? 1 : 0) +
                      " modal=" + base::NumberToString(modal_visible_ ? 1 : 0);
+  text += " docked_right=" + base::NumberToString(docked_right_ ? 1 : 0) +
+          " fixed_right=" + base::NumberToString(fixed_right_ ? 1 : 0) +
+          " conversation_width=" + base::NumberToString(conversation_width_);
   if (web_view_) {
     text += " webview=" + web_view_->bounds().ToString();
     text += " card=" + VisibleCardBounds().ToString();
@@ -802,6 +980,23 @@ bool CollapseOverlayToRail(BrowserWindowInterface* window) {
 bool ExpandOverlayFromRail(BrowserWindowInterface* window) {
   if (EnvOverlayHost* host = Find(window)) {
     host->ExpandFromRail();
+    return true;
+  }
+  return false;
+}
+
+bool DockOverlayToRight(BrowserWindowInterface* window, int conversation_width,
+                        bool fixed_right) {
+  if (EnvOverlayHost* host = Find(window)) {
+    host->SetDocked(true, conversation_width, fixed_right);
+    return true;
+  }
+  return false;
+}
+
+bool UndockOverlayFromRight(BrowserWindowInterface* window) {
+  if (EnvOverlayHost* host = Find(window)) {
+    host->SetDocked(false, 0, false);
     return true;
   }
   return false;

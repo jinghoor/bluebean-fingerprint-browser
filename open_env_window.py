@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 
 from _nowindow import no_window
@@ -28,6 +29,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import bluebean_paths  # noqa: E402
 from bluebean_paths import CHROME_EXE, PROFILE_DIR, DATA_ROOT  # noqa: E402
 from _env_driver import (                                     # noqa: E402
     EnvBrowser, focus_window, free_port, window_rect, windows_of_process)
@@ -154,7 +156,16 @@ def main() -> int:
     ap.add_argument("--product-startup", action="store_true")
     args = ap.parse_args()
 
-    profile = Path(args.profile)
+    profile = Path(args.profile).resolve()
+    # A custom development profile must be shared by the browser, bridge, and
+    # environment services. The module-level defaults are loaded before CLI
+    # parsing, so update the shared path values before importing those helpers.
+    # This prevents a browser opened with --profile from appearing empty in
+    # “我的环境” while the bridge reads a different profile.
+    os.environ["BLUEBEAN_PROFILE"] = str(profile)
+    os.environ["BLUEBEAN_PROFILE_ROOT"] = str(profile.parent)
+    bluebean_paths.PROFILE_DIR = profile
+    bluebean_paths.PROFILE_ROOT = profile.parent
     profile.mkdir(parents=True, exist_ok=True)
     # Service helpers must resolve the same native profile before Chrome starts.
     # Without this, a fresh user-data-dir can be mistaken for Profile::GetPath(),
