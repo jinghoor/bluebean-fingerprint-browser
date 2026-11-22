@@ -475,13 +475,38 @@ class BrowserBackend:
 (() => {
   const out = [], names = [], idCounts = new Map(), siblingGroups = new WeakMap();
   const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup],[draggable=true],[ondrop],[ondragover]';
-  const customCandidateSelector = '[class*="select"],[class*="dropdown"],[class*="cascader"],[class*="combobox"],[class*="picker"],[data-menu-item],[data-option]';
+  const customCandidateSelector = '[class*="select"],[class*="dropdown"],[class*="cascader"],[class*="combobox"],[class*="picker"],[class*="date"],[class*="time"],[class*="calendar"],[data-menu-item],[data-option]';
   const sel = summarySelector + ',' + customCandidateSelector + ',[onclick]';
   let count = 0, fingerprint = 0, id = 0;
+  function customKind(el) {
+    const cls = typeof el?.className === 'string' ? el.className : '';
+    if (/(^|[-_\s])(question-cascader|ws-cascader|cascader)([-_\s]|$)/i.test(cls)) return 'custom-cascader';
+    if (/(^|[-_\s])(q-date|q-time|date-picker|time-picker|calendar-picker)([-_\s]|$)/i.test(cls)) return 'custom-date-time';
+    if (/(^|[-_\s])(select|dropdown|cascader|combobox|picker)([-_\s]|$)/i.test(cls)) return 'custom-dropdown';
+    return '';
+  }
   function isCustomControl(el) {
     if (!el || el.nodeType !== 1 || el.matches('option,li,[role=option],[role=menuitem]')) return false;
     const cls = typeof el.className === 'string' ? el.className : '';
-    if (!/(^|[-_\s])(select|dropdown|cascader|combobox|picker)([-_\s]|$)/i.test(cls)) return false;
+    const kind = customKind(el);
+    if (!kind) return false;
+    if (kind === 'custom-cascader' || kind === 'custom-date-time') {
+      const dateRoot = kind === 'custom-date-time' &&
+        (el.matches('.q-date,.q-time,.date-picker,.time-picker') ||
+         el.querySelector('.select-result-wrap'));
+      if (!dateRoot && !el.querySelector('input,textarea') && !el.matches('input,textarea')) return false;
+      let parent = el.parentElement;
+      while (parent) {
+        if (customKind(parent) === kind && parent.querySelector('input,textarea')) return false;
+        parent = parent.parentElement;
+      }
+      return true;
+    }
+    let dateParent = el.parentElement;
+    while (dateParent) {
+      if (customKind(dateParent) === 'custom-date-time') return false;
+      dateParent = dateParent.parentElement;
+    }
     const explicitRoot = /(^|[-_\s])(wj-select|ws-select|dropdown-trigger|dropdown-toggle|cascader-trigger|combobox-input|picker-trigger)([-_\s]|$)/i.test(cls);
     if (!explicitRoot) {
       const preferred = el.querySelector('.wj-select,.ws-select');
@@ -558,7 +583,7 @@ class BrowserBackend:
         options: Array.from(el.options).slice(0, 120).map(option => ({value: option.value, label: (option.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120), selected: option.selected, disabled: option.disabled}))
       } : {};
       const inputState = el.matches('input[type=checkbox],input[type=radio]') ? {checked: el.checked, value: el.value || ''} : {};
-      const menuState = {input_type: el.getAttribute('type'), aria_haspopup: el.getAttribute('aria-haspopup'), aria_expanded: el.getAttribute('aria-expanded'), aria_selected: el.getAttribute('aria-selected'), aria_current: el.getAttribute('aria-current'), aria_level: el.getAttribute('aria-level'), menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null, custom_control:customControl, control_kind:customControl ? 'custom-dropdown' : null};
+      const menuState = {input_type: el.getAttribute('type'), aria_haspopup: el.getAttribute('aria-haspopup'), aria_expanded: el.getAttribute('aria-expanded'), aria_selected: el.getAttribute('aria-selected'), aria_current: el.getAttribute('aria-current'), aria_level: el.getAttribute('aria-level'), menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null, custom_control:customControl, control_kind:customControl ? customKind(el) : null};
       out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (customControl ? 'combobox' : el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport: clipped.right > clipped.left && clipped.bottom > clipped.top, clickable:cs.pointerEvents !== 'none', occluded: root === document ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...menuState});
     }
     if (out.length >= 120) return;
@@ -1622,6 +1647,134 @@ class BrowserBackend:
         return {'ok': True, 'element': element_id, 'multiple': multiple,
                 'selected': selected, 'trusted': trusted, 'mode': mode}
 
+    def _set_custom_date_time(self, env: str | None, element_id: str,
+                              item: dict, value: str) -> dict:
+        """Operate the date/time picker used by custom survey controls."""
+        cdp = self._cdp(env)
+        selector = item.get('selector')
+        if not selector:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'DATE_TIME_SELECTOR_UNAVAILABLE',
+                    'error': 'The custom date/time control has no stable selector.'}
+        kind_raw = cdp.evaluate(
+            "JSON.stringify((() => { const el=document.querySelector(" + json.dumps(selector) + ");"
+            "if(!el) return ''; const cls=String(el.className);"
+            "return /(^|[-_\\s])q-time([-_\\s]|$)/i.test(cls) ? 'time' : 'date'; })())")
+        kind = json.loads(kind_raw or '"date"') if kind_raw else 'date'
+        pattern = r'^\d{2}:\d{2}$' if kind == 'time' else r'^\d{4}-\d{2}-\d{2}$'
+        if not isinstance(value, str) or not re.fullmatch(pattern, value):
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'INVALID_DATE_TIME_VALUE',
+                    'error': 'Use YYYY-MM-DD for a custom date or HH:MM for a custom time.'}
+        if item.get('point'):
+            cx, cy = item['point']
+        else:
+            x, y, w, h = item['bbox']
+            cx, cy = x + max(1, w) / 2, y + max(1, h) / 2
+
+        def click(x: float, y: float) -> None:
+            self.cursor_event(env, x, y, 'date-time')
+            cdp.send('Input.dispatchMouseEvent',
+                     {'type': 'mouseMoved', 'x': x, 'y': y, 'button': 'none'})
+            time.sleep(0.02)
+            for event_type in ('mousePressed', 'mouseReleased'):
+                cdp.send('Input.dispatchMouseEvent',
+                         {'type': event_type, 'x': x, 'y': y,
+                          'button': 'left', 'clickCount': 1})
+
+        def wait_box(css: str) -> bool:
+            previous = None
+            stable = 0
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                raw = cdp.evaluate(
+                    "JSON.stringify((() => { const e=[...document.querySelectorAll(" +
+                    json.dumps(css) + ")].find(x=>{const r=x.getBoundingClientRect(),s=getComputedStyle(x);"
+                    "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'});"
+                    "if(!e) return null; const r=e.getBoundingClientRect(); return [r.x,r.y,r.width,r.height]; })())")
+                box = json.loads(raw or 'null') if raw else None
+                if box and previous and max(abs(box[i] - previous[i]) for i in range(4)) < 1:
+                    stable += 1
+                    if stable >= 2:
+                        return True
+                else:
+                    stable = 0
+                previous = box
+                time.sleep(0.05)
+            return bool(previous)
+
+        click(cx, cy)
+        if kind == 'date':
+            year, month, day = map(int, value.split('-'))
+            wait_box('.ws-date-picker')
+            for _ in range(24):
+                state = None
+                for _attempt in range(20):
+                    raw = cdp.evaluate("""JSON.stringify((() => {
+                      const panel=[...document.querySelectorAll('.ws-date-picker')].find(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'});
+                      if(!panel) return null; const header=panel.querySelector('.ws-date-picker__header');
+                      const nums=((header?.innerText||'').match(/\\d+/g)||[]).map(Number);
+                      return {year:nums[0]||0,month:nums[1]||0};
+                    })())""")
+                    state = json.loads(raw or 'null') if raw else None
+                    if state:
+                        break
+                    time.sleep(0.05)
+                if not state or not state.get('year'):
+                    return {'ok': False, 'action_sent': True,
+                            'error_code': 'CUSTOM_DATE_PANEL_NOT_FOUND',
+                            'error': 'The custom date picker did not open.',
+                            'outcome_unknown': True}
+                current = state['year'] * 12 + state['month']
+                target = year * 12 + month
+                if current == target:
+                    break
+                direction = 'next' if current < target else 'prev'
+                raw = cdp.evaluate("JSON.stringify((() => { const panel=[...document.querySelectorAll('.ws-date-picker')].find(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0}); if(!panel) return null; const b=panel.querySelector(" + json.dumps('.ws-date-picker__' + direction + '-btn') + "); if(!b) return null; const r=b.getBoundingClientRect(); return [r.left+r.width/2,r.top+r.height/2]; })())")
+                arrow = json.loads(raw or 'null') if raw else None
+                if not arrow:
+                    return {'ok': False, 'action_sent': True,
+                            'error_code': 'CUSTOM_DATE_NAVIGATION_UNAVAILABLE',
+                            'error': 'The custom date picker has no month navigation button.',
+                            'outcome_unknown': True}
+                click(float(arrow[0]), float(arrow[1]))
+                wait_box('.ws-date-picker')
+            wait_box('.ws-date-picker')
+            raw = cdp.evaluate("JSON.stringify((() => { const panel=[...document.querySelectorAll('.ws-date-picker')].find(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0}); if(!panel) return null; const cells=[...panel.querySelectorAll('td')].filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e); return r.width>0&&r.height>0&&s.display!=='none'&&!e.classList.contains('prev-month')&&!e.classList.contains('next-month')&&!e.classList.contains('disabled')&&e.textContent.trim()===" + json.dumps(str(day)) + "}); const e=cells[cells.length-1]; if(!e) return null; const r=e.getBoundingClientRect(); return [r.left+r.width/2,r.top+r.height/2]; })())")
+            cell = json.loads(raw or 'null') if raw else None
+            if not cell:
+                return {'ok': False, 'action_sent': True,
+                        'error_code': 'CUSTOM_DATE_NOT_VISIBLE',
+                        'error': 'The requested date is not visible in the custom calendar.',
+                        'outcome_unknown': True}
+            click(float(cell[0]), float(cell[1]))
+        else:
+            hour, minute = value.split(':')
+            wait_box('.ws-time-panel')
+            for column, wanted in enumerate((hour, minute)):
+                option = None
+                for _attempt in range(20):
+                    raw = cdp.evaluate("JSON.stringify((() => { const panel=[...document.querySelectorAll('.ws-time-panel')].find(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0}); if(!panel) return null; const list=panel.querySelectorAll('.ws-time-spinner__list')[" + str(column) + "]; if(!list) return null; const e=[...list.querySelectorAll('.ws-time-spinner__item')].find(x=>x.textContent.trim()===" + json.dumps(wanted) + "); if(!e) return null; e.scrollIntoView({block:'center'}); const r=e.getBoundingClientRect(); return [r.left+r.width/2,r.top+r.height/2]; })())")
+                    option = json.loads(raw or 'null') if raw else None
+                    if option:
+                        # Scrolling a spinner item can animate the list after
+                        # its first rect is returned. Re-read the settled point
+                        # before sending the trusted click.
+                        time.sleep(0.12)
+                        raw = cdp.evaluate("JSON.stringify((() => { const panel=[...document.querySelectorAll('.ws-time-panel')].find(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0}); if(!panel) return null; const list=panel.querySelectorAll('.ws-time-spinner__list')[" + str(column) + "]; const e=[...list.querySelectorAll('.ws-time-spinner__item')].find(x=>x.textContent.trim()===" + json.dumps(wanted) + "); if(!e) return null; const r=e.getBoundingClientRect(); return [r.left+r.width/2,r.top+r.height/2]; })())")
+                        option = json.loads(raw or 'null') if raw else None
+                    if option:
+                        break
+                    time.sleep(0.05)
+                if not option:
+                    return {'ok': False, 'action_sent': True,
+                            'error_code': 'CUSTOM_TIME_OPTION_NOT_FOUND',
+                            'error': 'The requested time option is not available.',
+                            'outcome_unknown': True}
+                click(float(option[0]), float(option[1]))
+        return {'ok': True, 'element': element_id, 'input_type': 'custom-' + kind,
+                'value': value, 'trusted': True, 'mode': 'custom-picker'}
+
     def set_date_time(self, env: str | None, element_id: str,
                       value: str) -> dict:
         """Set a native date/time input using its HTML value format."""
@@ -1636,6 +1789,8 @@ class BrowserBackend:
                     'error_code': 'STALE_OBSERVATION',
                     'error': 'Element id is not from the latest observation; observe again before setting date or time.',
                     'next_action': 'observe'}
+        if item.get('control_kind') == 'custom-date-time':
+            return self._set_custom_date_time(env, element_id, item, value)
         input_type = item.get('input_type') or ''
         patterns = {
             'date': r'^\d{4}-\d{2}-\d{2}$',
