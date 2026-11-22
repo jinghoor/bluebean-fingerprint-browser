@@ -481,7 +481,7 @@ class BrowserBackend:
     }
     return path.join(' > ');
   }
-  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link]';
+  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option]';
   const sel = summarySelector + ',[onclick]';
   const names = [];
   let count = 0, fingerprint = 0;
@@ -506,6 +506,18 @@ class BrowserBackend:
     const cy = Math.min(innerHeight - 1, Math.max(0, r.top + r.height / 2));
     const hit = document.elementFromPoint(cx, cy);
     const name = (rawLabel || el.getAttribute('title') || '').trim().replace(/\s+/g,' ').slice(0,60);
+    const selectState = el.tagName === 'SELECT' ? {
+      multiple: el.multiple,
+      selected_values: Array.from(el.selectedOptions).map(option => option.value),
+      options: Array.from(el.options).slice(0, 120).map(option => ({
+        value: option.value,
+        label: (option.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120),
+        selected: option.selected,
+        disabled: option.disabled,
+      })),
+    } : {};
+    const inputState = el.matches('input[type=checkbox],input[type=radio]')
+      ? {checked: el.checked, value: el.value || ''} : {};
     out.push({
       id: 'e' + (id++),
       tag: el.tagName.toLowerCase(),
@@ -519,6 +531,11 @@ class BrowserBackend:
       disabled: el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'),
       visual_only: false,
       selector: locator(el),
+      value: 'value' in el ? String(el.value ?? '') : '',
+      aria_expanded: el.getAttribute('aria-expanded'),
+      aria_selected: el.getAttribute('aria-selected'),
+      ...selectState,
+      ...inputState,
     });
   }
   return JSON.stringify({url: location.href, title: document.title,
@@ -890,6 +907,179 @@ class BrowserBackend:
             cdp.send("Input.dispatchKeyEvent", {"type": "char", "text": char})
             time.sleep(0.03)
         return {"element": element_id, "typed": text}
+
+    def select_options(self, env: str | None, element_id: str,
+                       values: Any = None) -> dict:
+        """Select one or more native HTML options through trusted keyboard input.
+
+        The page is inspected for the current option list, then the focused
+        native select is driven with Home, ArrowDown, and Ctrl+Space. This
+        keeps input events in Chromium's normal trusted path and works for
+        collapsed single-selects as well as multi-selects without opening a
+        platform popup that the Agent cannot observe.
+        """
+        resolved_env = env or self.env_state().get("active", "")
+        observation = self.observations.get(resolved_env)
+        try:
+            if observation is None:
+                raise KeyError(element_id)
+            item = observation.by_id(element_id)
+        except KeyError:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'STALE_OBSERVATION',
+                    'error': 'Element id is not from the latest observation; observe again before selecting.',
+                    'next_action': 'observe'}
+        if item.get('tag') != 'select':
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'SELECT_CONTROL_REQUIRED',
+                    'error': 'select works with native HTML select controls. For a custom dropdown, act on its combobox, observe again, then act on the option.',
+                    'next_action': 'act_then_observe'}
+        selector = item.get('selector')
+        if not selector:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'SELECTOR_UNAVAILABLE',
+                    'error': 'The select control has no stable selector; observe again.',
+                    'next_action': 'observe'}
+        if values is None:
+            values = []
+        if isinstance(values, str):
+            requested = [values]
+        elif isinstance(values, list):
+            requested = [str(value) for value in values]
+        else:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'INVALID_SELECT_VALUES',
+                    'error': 'select.values must be a string or an array of strings.'}
+        requested = list(dict.fromkeys(requested))
+        cdp = self._cdp(env)
+        if observation.document_token:
+            check = self.wait_for(env, selector=selector,
+                                  document_token=observation.document_token,
+                                  state='actionable', timeout_ms=2000)
+            if not check.get('ok'):
+                return check
+        raw = cdp.evaluate(
+            "(() => { const el = document.querySelector(" + json.dumps(selector) +
+            "); if (!el || el.tagName !== 'SELECT') return ''; return JSON.stringify({"
+            "multiple: el.multiple, options: Array.from(el.options).map(o => ({"
+            "value: o.value, label: (o.textContent || '').trim().replace(/\\s+/g, ' '),"
+            "disabled: o.disabled})), selected: Array.from(el.selectedOptions).map(o => o.value)}) })()",
+            timeout=5)
+        state = json.loads(raw or '{}') if raw else {}
+        options = state.get('options') or []
+        if not options:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'SELECT_OPTIONS_UNAVAILABLE',
+                    'error': 'The select control has no available options.'}
+        multiple = bool(state.get('multiple'))
+        if not multiple and len(requested) != 1:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'SINGLE_SELECT_VALUE_COUNT',
+                    'error': 'This control accepts exactly one option value.'}
+        wanted = []
+        missing = []
+        for value in requested:
+            exact = next((i for i, option in enumerate(options)
+                          if option.get('value') == value and not option.get('disabled')), None)
+            if exact is None:
+                folded = value.casefold()
+                exact = next((i for i, option in enumerate(options)
+                              if str(option.get('label', '')).casefold() == folded
+                              and not option.get('disabled')), None)
+            if exact is None:
+                missing.append(value)
+            else:
+                wanted.append(exact)
+        if missing:
+            return {'ok': False, 'action_sent': False,
+                    'error_code': 'SELECT_OPTION_NOT_FOUND',
+                    'error': 'Option value or label not found: ' + ', '.join(missing),
+                    'options': [{'value': option.get('value', ''),
+                                 'label': option.get('label', '')}
+                                for option in options if not option.get('disabled')]}
+
+        x, y, w, h = item['bbox']
+        cx, cy = x + max(1, w) // 2, y + max(1, h) // 2
+        if item.get('point'):
+            cx, cy = item['point']
+        self.cursor_event(env, cx, cy, 'select')
+        for event_type in ('mousePressed', 'mouseReleased'):
+            cdp.send('Input.dispatchMouseEvent', {
+                'type': event_type, 'x': cx, 'y': cy,
+                'button': 'left', 'clickCount': 1})
+
+        def key(key_name: str, code: str, virtual_key: int,
+                modifiers: int = 0) -> None:
+            for event_type in ('keyDown', 'keyUp'):
+                cdp.send('Input.dispatchKeyEvent', {
+                    'type': event_type, 'key': key_name, 'code': code,
+                    'windowsVirtualKeyCode': virtual_key,
+                    'nativeVirtualKeyCode': virtual_key,
+                    'modifiers': modifiers})
+
+        key('Home', 'Home', 36)
+        if multiple:
+            if 0 not in wanted:
+                key(' ', 'Space', 32, 2)
+            for index in range(1, len(options)):
+                key('ArrowDown', 'ArrowDown', 40, 2)
+                if index in wanted:
+                    key(' ', 'Space', 32, 2)
+        else:
+            for _ in range(wanted[0] if wanted else 0):
+                key('ArrowDown', 'ArrowDown', 40)
+        key('Enter', 'Enter', 13)
+        # Input.dispatchKeyEvent acknowledges the browser-side enqueue before
+        # the renderer runs the select's default action. Yield one renderer
+        # task so the selection and its trusted input/change events settle
+        # before reading the result.
+        cdp.evaluate('new Promise(resolve => setTimeout(resolve, 0))',
+                     timeout=5, await_promise=True)
+        expected_indexes = wanted if multiple else [wanted[0] if wanted else 0]
+        expected_values = [options[index].get('value', '')
+                           for index in expected_indexes]
+        selected = []
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            selected_raw = cdp.evaluate(
+                "JSON.stringify(Array.from(document.querySelector(" + json.dumps(selector) +
+                ").selectedOptions).map(o => ({value:o.value,label:(o.textContent || '').trim()})))",
+                timeout=5)
+            selected = json.loads(selected_raw or '[]') if selected_raw else []
+            if [option.get('value', '') for option in selected] == expected_values:
+                break
+            time.sleep(0.01)
+        mode = 'keyboard'
+        trusted = True
+        if [option.get('value', '') for option in selected] != expected_values:
+            # Platform select popups can consume keyboard focus before the
+            # renderer receives the final selection, especially for collapsed
+            # multi-selects. Apply the same selection through the native
+            # HTMLSelectElement state and dispatch the standard form events as
+            # a deterministic fallback for React and other controlled forms.
+            fallback = (
+                "(() => { const el = document.querySelector(" + json.dumps(selector) +
+                "); if (!el || el.tagName !== 'SELECT') return ''; const wanted = new Set(" +
+                json.dumps(expected_values) + "); Array.from(el.options).forEach(o => {"
+                "o.selected = wanted.has(o.value) && !o.disabled; });"
+                "el.dispatchEvent(new Event('input', {bubbles:true}));"
+                "el.dispatchEvent(new Event('change', {bubbles:true}));"
+                "return JSON.stringify(Array.from(el.selectedOptions).map(o => ({"
+                "value:o.value,label:(o.textContent || '').trim()}))); })()")
+            selected_raw = cdp.evaluate(fallback, timeout=5)
+            selected = json.loads(selected_raw or '[]') if selected_raw else []
+            mode = 'dom-events'
+            trusted = False
+        if [option.get('value', '') for option in selected] != expected_values:
+            return {'ok': False, 'action_sent': True,
+                    'error_code': 'SELECT_NOT_APPLIED',
+                    'error': 'The page did not apply the requested selection.',
+                    'selected': selected,
+                    'expected': expected_values,
+                    'outcome_unknown': True,
+                    'retry_hint': 'Observe the select again before retrying.'}
+        return {'ok': True, 'element': element_id, 'multiple': multiple,
+                'selected': selected, 'trusted': trusted, 'mode': mode}
 
     def scroll(self, env: str | None, delta_x: float = 0,
                delta_y: float = 640, x: float | None = None,

@@ -189,9 +189,10 @@ export function apply(ctx) {
       '- getter: {observe:{}} returns "elements" with ids, roles, names and boxes.\n' +
       '- mutate: {act:{id:"e3"}} clicks an element id from the SAME environment\'s last observe.\n' +
       '  Element ids are opaque and change with each observe: copy the full returned id, never guess an id.\n' +
-      '- {type:{id:"e5", text:"..."}}, {goto:{url:"https://..."}}, {read:{selector:"body"}},\n' +
+      '- {type:{id:"e5", text:"..."}}, {select:{id:"e6", values:["us","ca"]}}, {goto:{url:"https://..."}}, {read:{selector:"body"}},\n' +
       '  {scroll:{delta_y:640}}, {wait:{ms:500}}, {shot:{id:"e1"}} (screenshots are slow; prefer observe/read).\n' +
       '  Browser actions show a native BlueBean Agent pointer. Keep scroll deltas small when a page has nested scroll areas.\n' +
+      '  Use select only for a native HTML select. observe returns its options, values, labels, selected state and whether it is multiple. Pass one value for a single select or an array for a multi-select. Values can match the option value or visible label. For custom comboboxes, act on the combobox, observe again, then act on the visible option.\n' +
       '- Prefer {wait_for:{selector:"#search",state:"actionable",timeout_ms:10000}} to fixed sleeps.\n' +
       '  wait_for accepts selector, text (visible substring), url (exact), state (dom/actionable/visible/hidden/complete), timeout_ms (0-30000), stable_ms (0-1000). Conditions combine with AND.\n' +
       '  Default state: actionable with selector, dom otherwise. actionable checks visible/enabled/uncovered and 100ms stable target geometry.\n' +
