@@ -13,6 +13,7 @@
 - Add trusted drag paths for sortable controls, drop zones, and pointer-driven sliders.
 - Add per-environment download waiting with a private download directory and completed-file verification.
 - Add explicit clipboard read/write and accessibility-tree inspection capabilities for tasks that need semantic page context.
+- Extend wait_for with value, checked, selected, expanded, iframe, and Shadow DOM conditions for post-action verification.
 - Keep fixed-insert conversation docks persistent when the user clicks the page or other browser content. Page input continues normally without folding the dock.
 - Keep the DSH sidebar and conversation interactive while the middle browser page remains visible and clickable.
 - Keep DSH full-permission confirmation dialogs fully interactive, including releases that render the checkbox panel without dialog semantics.

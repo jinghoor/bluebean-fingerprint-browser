@@ -70,6 +70,14 @@ PROBE_JS = r"""
     box = [r.x,r.y,r.width,r.height].map(v => Math.round(v*2)/2);
   }
   const textMatched = !condition.text || !!el && (el.innerText || '').includes(condition.text);
+  const valueMatched = condition.value === undefined || !!el && String(el.value ?? '') === String(condition.value);
+  const checkedMatched = condition.checked === undefined || !!el &&
+    (('checked' in el ? !!el.checked : el.getAttribute('aria-checked') === 'true') === !!condition.checked);
+  const selectedValues = el && el.tagName === 'SELECT' ? Array.from(el.selectedOptions).map(option => option.value) : [];
+  const selectedMatched = condition.selected === undefined ||
+    (Array.isArray(condition.selected) && condition.selected.every(value => selectedValues.includes(String(value))));
+  const expandedMatched = condition.expanded === undefined || !!el &&
+    ((el.getAttribute('aria-expanded') === 'true') === !!condition.expanded);
   if (condition.identity) {
     const name = el && (el.getAttribute('aria-label') || el.getAttribute('name') ||
       el.getAttribute('placeholder') || el.innerText ||
@@ -79,11 +87,11 @@ PROBE_JS = r"""
         (el.getAttribute('href') || '').slice(0,80) !== condition.identity.href)
       return {...result, stale_target:true, reason:'target_changed'};
   }
-  const matched = textMatched && (state === 'hidden' || !condition.selector || !!el) && (state === 'hidden' ? !visible :
+  const matched = textMatched && valueMatched && checkedMatched && selectedMatched && expandedMatched && (state === 'hidden' || !condition.selector || !!el) && (state === 'hidden' ? !visible :
     state === 'actionable' ? visible && enabled && hit :
     state === 'visible' ? visible : state === 'complete' ? result.load_complete : result.dom_ready);
   return {...result, matched, visible, enabled, hit, box, point,
-    reason: matched ? 'condition_met' : !textMatched ? 'text_not_matched' :
+    reason: matched ? 'condition_met' : !textMatched ? 'text_not_matched' : !valueMatched ? 'value_not_matched' : !checkedMatched ? 'checked_not_matched' : !selectedMatched ? 'selection_not_matched' : !expandedMatched ? 'expanded_not_matched' :
       !el ? 'target_missing' : !visible ? 'target_not_visible' : !enabled ? 'target_disabled' :
       !hit ? 'target_covered' : 'document_loading'};
 })
@@ -92,7 +100,8 @@ PROBE_JS = r"""
 
 def wait_for(cdp, condition: dict) -> dict:
     allowed = {'selector', 'text', 'url', 'state', 'timeout_ms', 'stable_ms',
-               'document_token', 'identity', 'editable', 'frame_path', 'shadow_path'}
+               'document_token', 'identity', 'editable', 'frame_path', 'shadow_path',
+               'value', 'checked', 'selected', 'expanded'}
     if not isinstance(condition, dict) or set(condition) - allowed:
         raise ValueError('unsupported page wait condition')
     condition = dict(condition)
@@ -109,6 +118,14 @@ def wait_for(cdp, condition: dict) -> dict:
                                  any(not isinstance(item, str) or not item or len(item) > 2048
                                      for item in condition[key])):
             raise ValueError(f'{key} must be an array of CSS selectors')
+    if 'checked' in condition and not isinstance(condition['checked'], bool):
+        raise ValueError('checked must be boolean')
+    if 'expanded' in condition and not isinstance(condition['expanded'], bool):
+        raise ValueError('expanded must be boolean')
+    if 'selected' in condition and (not isinstance(condition['selected'], list) or
+                                    any(not isinstance(item, (str, int, float)) or isinstance(item, bool)
+                                        for item in condition['selected'])):
+        raise ValueError('selected must be an array of scalar option values')
     for key, default, maximum in (('timeout_ms',10000,30000), ('stable_ms',100 if state == 'actionable' else 0,1000)):
         value = condition.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int,float)) or not math.isfinite(value) or not 0 <= value <= maximum:

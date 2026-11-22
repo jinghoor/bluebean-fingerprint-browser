@@ -202,7 +202,7 @@ export function apply(ctx) {
       '  Use new_tab, switch_tab, and close_tab for browser tabs. After a new window or popup appears, observe the selected environment again before acting in it.\n' +
       '  If a page opens a JavaScript alert, confirm, or prompt, stop the current task and use dialog with accept:true or false. Never continue typing while a dialog is open.\n' +
       '- Prefer {wait_for:{selector:"#search",state:"actionable",timeout_ms:10000}} to fixed sleeps.\n' +
-      '  wait_for accepts selector, text (visible substring), url (exact), state (dom/actionable/visible/hidden/complete), timeout_ms (0-30000), stable_ms (0-1000). Conditions combine with AND.\n' +
+      '  wait_for accepts selector, text (visible substring), url (exact), value, checked, selected, expanded, state (dom/actionable/visible/hidden/complete), timeout_ms (0-30000), stable_ms (0-1000). Conditions combine with AND.\n' +
       '  Default state: actionable with selector, dom otherwise. actionable checks visible/enabled/uncovered and 100ms stable target geometry.\n' +
       '  Background loading is informational: continue when the required target is ready, even if the spinner runs. Use complete only when the task explicitly needs it.\n' +
       '  For product searches, filters, and site search, use the real page controls: observe the search input, type the query, act on the submit/search button, then wait_for results. Do not replace this flow with a constructed search URL unless the user explicitly gives a URL or the page has no usable search control.\n' +
