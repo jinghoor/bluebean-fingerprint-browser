@@ -68,7 +68,8 @@ process = subprocess.Popen([
     f"--remote-debugging-port={debug_port}", "--headless=new", "--disable-gpu",
     "--no-first-run", "--no-default-browser-check", url,
 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-report = {"passed": False, "checks": [], "scope": "private headless browser and local fixture"}
+report = {"passed": False, "checks": [], "timings_ms": {},
+          "scope": "private headless browser and local fixture"}
 backend = BrowserBackend(port=debug_port)
 backend.cursor_event = lambda *args, **kwargs: True
 backend.live_state = lambda: {"active": env_id, "envs": []}
@@ -84,10 +85,14 @@ try:
     assert [option["value"] for option in controls["#multi"]["options"]] == ["a", "b", "c"]
     report["checks"].append("observe_returns_option_values_labels_and_multiple_state")
 
+    started = time.perf_counter()
     single = backend.select_options(env_id, controls["#single"]["id"], "Beta")
+    report["timings_ms"]["single_select"] = round((time.perf_counter() - started) * 1000, 2)
     assert single["ok"] and single["trusted"]
     assert [option["value"] for option in single["selected"]] == ["b"]
+    started = time.perf_counter()
     multi = backend.select_options(env_id, controls["#multi"]["id"], ["Alpha", "Gamma"])
+    report["timings_ms"]["multi_select"] = round((time.perf_counter() - started) * 1000, 2)
     assert multi["ok"] and multi["trusted"]
     assert [option["value"] for option in multi["selected"]] == ["a", "c"]
     report["checks"].append("single_and_multi_select_apply_by_value_or_label")

@@ -1066,7 +1066,7 @@ class BrowserBackend:
             self._dispatch_keys(cdp, ['CTRL+A', 'BACKSPACE'])
         for char in text:
             cdp.send("Input.dispatchKeyEvent", {"type": "char", "text": char})
-            time.sleep(0.03)
+            time.sleep(0.04)
         return {"element": element_id, "typed": text, "replaced": replace,
                 "trusted": True}
 
@@ -1767,9 +1767,9 @@ class BrowserBackend:
             self.cursor_event(env, state['x'], state['y'], 'menu')
             cdp.send('Input.dispatchMouseEvent', {
                 'type': 'mouseMoved', 'x': state['x'], 'y': state['y'], 'button': 'none'})
-            # Give custom popup components one renderer task to promote the
+            # Give custom popup components one paint opportunity to promote the
             # hovered item before the trusted press/release pair.
-            time.sleep(0.05)
+            time.sleep(0.03)
             for event_type in ('mousePressed', 'mouseReleased'):
                 cdp.send('Input.dispatchMouseEvent', {
                     'type': event_type, 'x': state['x'], 'y': state['y'],

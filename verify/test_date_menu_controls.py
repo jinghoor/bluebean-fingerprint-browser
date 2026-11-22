@@ -72,7 +72,8 @@ process = subprocess.Popen([
     f"--remote-debugging-port={debug_port}", "--headless=new", "--disable-gpu",
     "--no-first-run", "--no-default-browser-check", url,
 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-report = {"passed": False, "checks": [], "scope": "private headless browser and local fixture"}
+report = {"passed": False, "checks": [], "timings_ms": {},
+          "scope": "private headless browser and local fixture"}
 backend = BrowserBackend(port=debug_port)
 backend.cursor_event = lambda *args, **kwargs: True
 backend.live_state = lambda: {"active": env_id, "envs": []}
@@ -89,18 +90,28 @@ try:
     assert controls["#custom"]["role"] == "combobox"
     report["checks"].append("observe_identifies_date_time_input_types")
 
+    started = time.perf_counter()
     date = backend.set_date_time(env_id, controls["#date"]["id"], "2026-12-25")
+    report["timings_ms"]["date"] = round((time.perf_counter() - started) * 1000, 2)
+    started = time.perf_counter()
     time_value = backend.set_date_time(env_id, controls["#time"]["id"], "14:30")
+    report["timings_ms"]["time"] = round((time.perf_counter() - started) * 1000, 2)
+    started = time.perf_counter()
     datetime_value = backend.set_date_time(env_id, controls["#datetime"]["id"], "2026-12-25T14:30")
+    report["timings_ms"]["datetime"] = round((time.perf_counter() - started) * 1000, 2)
     assert date["ok"] and time_value["ok"] and datetime_value["ok"]
     assert date["value"] == "2026-12-25" and time_value["value"] == "14:30"
     assert datetime_value["value"] == "2026-12-25T14:30"
     report["checks"].append("date_time_values_apply_in_html_formats")
 
+    started = time.perf_counter()
     menu = backend.menu_select(env_id, controls["#category"]["id"],
                                ["Electronics", "Computers", "Laptops", "Gaming"])
+    report["timings_ms"]["four_level_menu"] = round((time.perf_counter() - started) * 1000, 2)
     assert menu["ok"] and menu["path"] == ["Electronics", "Computers", "Laptops", "Gaming"]
+    started = time.perf_counter()
     custom_menu = backend.menu_select(env_id, controls["#custom"]["id"], ["自定义选项"])
+    report["timings_ms"]["custom_menu"] = round((time.perf_counter() - started) * 1000, 2)
     assert custom_menu["ok"] and custom_menu["path"] == ["自定义选项"]
     state = json.loads(backend._cdp(env_id).evaluate(
         "JSON.stringify({date:date.value,time:time.value,datetime:datetime.value,result:result.textContent,custom:customResult.textContent})"))

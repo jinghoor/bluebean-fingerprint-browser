@@ -16,6 +16,7 @@
 - Extend wait_for with value, checked, selected, expanded, iframe, and Shadow DOM conditions for post-action verification.
 - Add an infinite-canvas action protocol for node movement, connections, disconnections, editing, panning, zooming, selection, and Escape cancellation.
 - Recognize visible div-based dropdown triggers such as `wj-select` and `select-content-wrap`, deduplicate nested visual wrappers, and move the pointer over custom menu items before clicking them.
+- Keep the custom-menu hover settle window at 40 ms after measurement, reducing each cascading level without sacrificing the real Wenjuan dropdown selection.
 - Make infinite-canvas actions validate finite coordinates and the selected board, focus the board before keyboard follow-up, use complete double-click cycles for editing, and preserve the zoom anchor while panning and zooming.
 - Add a ten-round graph-editor regression that verifies node selection, connections, disconnections, editing, cancellation, layout-shifted coordinates, panning, anchored zooming, and invalid-input rejection.
 - Keep fixed-insert conversation docks persistent when the user clicks the page or other browser content. Page input continues normally without folding the dock.
