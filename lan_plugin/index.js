@@ -148,6 +148,7 @@ export function apply(ctx) {
           + '工具返回 outcome_unknown 时，操作可能已经发生，必须先读取页面确认，不要自动重复点击、输入或导航。'
           + 'snapshot_warning 表示操作已完成但附加页面摘要失败，不要因此重放操作。'
           + '页面等待规则：地址栏或标签页仍在加载不代表不能操作。goto返回interactive或readiness.dom_ready后立即observe；目标可见、可用且无遮挡即可继续，不等complete或network idle。'
+          + '搜索、筛选和站内查找必须优先走真实网页交互：先observe找到搜索输入框，使用type填写关键词，再act点击搜索/提交按钮，最后wait_for结果。不要把关键词直接拼成搜索URL或用goto替代输入框，除非用户明确要求打开指定URL，或页面没有可用的搜索控件。这样浏览器会展示完整的指针移动和输入过程。'
           + '目标或业务结果未出现时，用browser_task的wait_for等待准确selector/text/url条件，优先替代固定wait或反复截图；只读等待不会点击、输入或重新导航。'
           + '按钮存在不等于业务完成：登录、提交、发布后wait_for成功提示或目标URL，不因仍在转圈而重复提交。STALE_OBSERVATION先observe更新目标；PAGE_CONDITION_TIMEOUT先检查页面，不自动重放操作。'
           + '每次observe返回的元素id只用于该次最新观察，必须原样使用，不猜测e0等编号。已知道目标selector时直接wait_for目标，目标就绪后observe一次；不要轮询整页或连续重复observe。'
@@ -195,6 +196,7 @@ export function apply(ctx) {
       '  wait_for accepts selector, text (visible substring), url (exact), state (dom/actionable/visible/hidden/complete), timeout_ms (0-30000), stable_ms (0-1000). Conditions combine with AND.\n' +
       '  Default state: actionable with selector, dom otherwise. actionable checks visible/enabled/uncovered and 100ms stable target geometry.\n' +
       '  Background loading is informational: continue when the required target is ready, even if the spinner runs. Use complete only when the task explicitly needs it.\n' +
+      '  For product searches, filters, and site search, use the real page controls: observe the search input, type the query, act on the submit/search button, then wait_for results. Do not replace this flow with a constructed search URL unless the user explicitly gives a URL or the page has no usable search control.\n' +
       '  After submitting, wait_for the business success text or URL; never replay an uncertain action.\n' +
       'Use ONLY the environments selected for this conversation. Pass env for one selected environment, ' +
       'targets for several selected environments, or omit both to use the selection. ' +
