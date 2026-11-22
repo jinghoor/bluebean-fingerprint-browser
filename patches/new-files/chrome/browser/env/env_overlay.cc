@@ -156,27 +156,41 @@ class EnvAutomationCursorView : public views::View {
       return;
     }
     const base::TimeDelta age = base::TimeTicks::Now() - started_;
-    const float pulse = std::clamp(
-        static_cast<float>(age.InMillisecondsF() / 260.0), 0.0f, 1.0f);
     const gfx::PointF p = position_;
 
-    cc::PaintFlags shadow;
-    shadow.setAntiAlias(true);
-    shadow.setStyle(cc::PaintFlags::kFill_Style);
-    shadow.setColor(SkColorSetARGB(70, 15, 23, 42));
-    canvas->DrawCircle(gfx::PointF(p.x() + 1.0f, p.y() + 2.0f), 8.0f,
-                       shadow);
+    const float speed = std::sqrt(velocity_.x() * velocity_.x() +
+                                  velocity_.y() * velocity_.y());
+    if (speed > 0.15f) {
+      const gfx::PointF direction(velocity_.x() / speed,
+                                  velocity_.y() / speed);
+      for (int index = 1; index <= 3; ++index) {
+        const float fade = 1.0f - static_cast<float>(index) * 0.27f;
+        cc::PaintFlags trail;
+        trail.setAntiAlias(true);
+        trail.setStyle(cc::PaintFlags::kFill_Style);
+        trail.setColor(SkColorSetARGB(static_cast<int>(42.0f * fade),
+                                      59, 130, 246));
+        canvas->DrawCircle(
+            gfx::PointF(p.x() - direction.x() * index * 5.0f,
+                        p.y() - direction.y() * index * 5.0f),
+            2.8f - index * 0.55f, trail);
+      }
+    }
 
-    cc::PaintFlags ring;
-    ring.setAntiAlias(true);
-    ring.setStyle(cc::PaintFlags::kStroke_Style);
-    ring.setStrokeWidth(2.0f);
-    const int alpha = action_ == "error" ? 220 : 180;
-    ring.setColor(SkColorSetARGB(alpha, action_ == "error" ? 232 : 96,
-                                 action_ == "error" ? 86 : 165,
-                                 action_ == "error" ? 76 : 250));
-    canvas->DrawCircle(p, 11.0f + pulse * (action_ == "click" ? 15.0f : 4.0f),
-                       ring);
+    if (action_ == "click") {
+      const float click_progress = std::clamp(
+          static_cast<float>(age.InMillisecondsF() / 320.0), 0.0f, 1.0f);
+      if (click_progress < 1.0f) {
+        cc::PaintFlags ripple;
+        ripple.setAntiAlias(true);
+        ripple.setStyle(cc::PaintFlags::kStroke_Style);
+        ripple.setStrokeWidth(2.0f);
+        ripple.setColor(SkColorSetARGB(
+            static_cast<int>(180.0f * (1.0f - click_progress)),
+            59, 130, 246));
+        canvas->DrawCircle(p, 8.0f + click_progress * 19.0f, ripple);
+      }
+    }
 
     auto pointer_path = [](const gfx::PointF& origin, float dx,
                            float dy) {
@@ -211,6 +225,15 @@ class EnvAutomationCursorView : public views::View {
     pointer_outline.setColor(SkColorSetARGB(245, 15, 23, 42));
     canvas->DrawPath(pointer_path(p, 0.0f, 0.0f), pointer_outline);
 
+    cc::PaintFlags pointer_highlight;
+    pointer_highlight.setAntiAlias(true);
+    pointer_highlight.setStyle(cc::PaintFlags::kStroke_Style);
+    pointer_highlight.setStrokeWidth(1.0f);
+    pointer_highlight.setColor(SkColorSetARGB(190, 59, 130, 246));
+    canvas->DrawLine(gfx::PointF(p.x() + 3.0f, p.y() + 5.0f),
+                     gfx::PointF(p.x() + 15.0f, p.y() + 12.0f),
+                     pointer_highlight);
+
     if (action_ == "scroll") {
       cc::PaintFlags scroll;
       scroll.setAntiAlias(true);
@@ -233,11 +256,14 @@ class EnvAutomationCursorView : public views::View {
     // commands without changing the input coordinates sent to the page.
     const float eased = raw * raw * (3.0f - 2.0f * raw);
     const float inverse = 1.0f - eased;
-    position_ = gfx::PointF(
+    const gfx::PointF next_position(
         inverse * inverse * from_.x() + 2.0f * inverse * eased * control_.x() +
             eased * eased * target_.x(),
         inverse * inverse * from_.y() + 2.0f * inverse * eased * control_.y() +
             eased * eased * target_.y());
+    velocity_ = gfx::Vector2dF(next_position.x() - position_.x(),
+                               next_position.y() - position_.y());
+    position_ = next_position;
     if (raw >= 1.0f) {
       timer_.Stop();
       position_ = target_;
@@ -249,6 +275,7 @@ class EnvAutomationCursorView : public views::View {
   gfx::PointF control_;
   gfx::PointF target_;
   gfx::PointF position_;
+  gfx::Vector2dF velocity_;
   std::string action_ = "move";
   base::TimeTicks started_;
   base::TimeDelta duration_ = base::Milliseconds(90);
