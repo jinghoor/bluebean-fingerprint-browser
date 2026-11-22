@@ -15,6 +15,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/functional/bind.h"
@@ -85,6 +86,11 @@ class EnvAutomationCursorView : public views::View {
   EnvAutomationCursorView() {
     SetCanProcessEventsWithinSubtree(false);
     SetFocusBehavior(FocusBehavior::NEVER);
+    // A dedicated composited layer is required because the DSH WebContents
+    // is hosted by a NativeViewHost. The layer stays transparent to input but
+    // can paint above the native page surface.
+    SetPaintToLayer(ui::LAYER_TEXTURED);
+    layer()->SetFillsBoundsOpaquely(false);
     SetVisible(false);
   }
 
@@ -347,6 +353,13 @@ class EnvOverlayHost : public views::View,
       return;
     }
     cursor_states_[env_id] = gfx::PointF(x, y);
+    // NativeViewHost may add a compositor child after the overlay view. Keep
+    // the marker above both the page surface and the DSH WebContents while
+    // leaving hit testing disabled.
+    if (browser_view_) {
+      browser_view_->ReorderChildView(cursor_view_,
+                                      browser_view_->children().size());
+    }
     cursor_view_->ShowAt(PagePointToViewPoint(gfx::PointF(x, y)), action);
   }
 
