@@ -113,6 +113,20 @@ class BackendTests(unittest.TestCase):
                 self.backend.live_state()
         self.assertIsNone(self.backend._live_cache)
 
+    def test_active_environment_prefers_the_visible_tab(self):
+        pages = [
+            {'id': 'home', 'url': 'https://example.test/home'},
+            {'id': 'product', 'url': 'https://example.test/product/create'},
+        ]
+        self.backend.live_state = Mock(return_value={
+            'active': 'env-1',
+            'envs': [{'env_id': 'env-1', 'tabs': [
+                {'target_id': 'home'}, {'target_id': 'product'}]}],
+        })
+        self.backend.targets = Mock(return_value=pages)
+        self.backend._visibility = Mock(side_effect=lambda page: 'visible' if page['id'] == 'product' else 'hidden')
+        self.assertEqual(self.backend.target_for_env('env-1')['id'], 'product')
+
     def test_runtime_state_uses_compact_native_command_and_caches_briefly(self):
         reply = {'ok': True, 'active': 'fb-020', 'running_envs': ['fb-008', 'fb-020']}
         with patch('env_cli.resolve_profile_dir', return_value=Path(r'C:\profile')), \

@@ -20,7 +20,7 @@ PROFILE = OUT / "Profile"
 PROFILE.mkdir(parents=True)
 PAGE = '''<!doctype html><input id="text" value="old"><button id="submit">提交</button>
 <input id="check" type="checkbox"><input id="range" type="range" min="0" max="100" value="10">
-<input id="file" type="file"><button id="drag" draggable="true">拖动</button><button id="drop">放置</button><a id="download" href="/download">下载</a>
+<input id="file" type="file"><input id="hidden-file" type="file" accept=".png" style="display:none"><button id="drag" draggable="true">拖动</button><button id="drop">放置</button><a id="download" href="/download">下载</a>
 <div id="offscreen" style="margin-top:1800px">目标区域</div><input id="offscreen-input" style="margin-top:120px" value="old-offscreen">
 <pre id="state"></pre><script>drag.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain','ok'));drop.addEventListener('dragover',e=>e.preventDefault());drop.addEventListener('drop',e=>state.textContent+='drop:yes\\n');
 for(const x of [text,check,range,file]) for(const t of ['input','change'])
@@ -85,7 +85,8 @@ try:
     wait_for_target(backend, env_id)
     observed = backend.observe(env_id)
     controls = {item["selector"]: item for item in observed["elements"]}
-    assert "#text" in controls and "#check" in controls and "#range" in controls and "#file" in controls and "#drag" in controls and "#drop" in controls and "#download" in controls and "#offscreen-input" in controls
+    assert "#text" in controls and "#check" in controls and "#range" in controls and "#file" in controls and "#hidden-file" in controls and "#drag" in controls and "#drop" in controls and "#download" in controls and "#offscreen-input" in controls
+    assert controls["#hidden-file"]["file_accept"] == ".png"
     assert controls["#offscreen-input"]["in_viewport"] is False
     report["checks"].append("observe_finds_editable_check_range_file_controls")
 
@@ -111,6 +112,8 @@ try:
         upload_path = temp.name
     uploaded = backend.upload_file(env_id, controls["#file"]["id"], upload_path)
     assert uploaded["ok"] and uploaded["file_count"] == 1
+    hidden_uploaded = backend.upload_file(env_id, controls["#hidden-file"]["id"], upload_path)
+    assert hidden_uploaded["ok"] and hidden_uploaded["file_count"] == 1
     scrolled = backend.scroll_into_view(env_id, selector="#offscreen")
     assert scrolled["ok"] and scrolled["point"][1] > 0
     offscreen_typed = backend.type_text(env_id, controls["#offscreen-input"]["id"], "visible", replace=True)

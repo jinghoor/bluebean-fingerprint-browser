@@ -23,6 +23,9 @@
 - Keep rendered controls outside the current viewport in observe results and automatically scroll them into a stable visible position before Agent actions.
 - Refresh Agent observations after scrolling so virtualized lists and lazy-loaded form controls can be located and filled without stale element ids.
 - Raise the default Agent observation window to 160 controls, so late questionnaire fields remain discoverable after long runs of earlier inputs.
+- Resolve the active environment's visible tab before using the native tab-list order, preventing Agent actions from landing on a different background tab.
+- Include connected hidden file inputs in observations so custom upload cards can use upload_file without relying on a visible native input.
+- Expose file input accept and multiple metadata so agents can choose the correct image or video upload slot.
 - Make infinite-canvas actions validate finite coordinates and the selected board, focus the board before keyboard follow-up, use complete double-click cycles for editing, and preserve the zoom anchor while panning and zooming.
 - Add a ten-round graph-editor regression that verifies node selection, connections, disconnections, editing, cancellation, layout-shifted coordinates, panning, anchored zooming, and invalid-input rejection.
 - Keep fixed-insert conversation docks persistent when the user clicks the page or other browser content. Page input continues normally without folding the dock.

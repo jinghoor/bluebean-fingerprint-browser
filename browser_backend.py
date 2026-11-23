@@ -253,6 +253,26 @@ class BrowserBackend:
         if not pages:
             raise RuntimeError("no page targets")
 
+        # An environment can own several tabs. The native tab list is not
+        # ordered by the tab the user is currently viewing, so do not blindly
+        # select its first target for the active environment. Chromium exposes
+        # the selected tab as document.visibilityState=visible. Prefer that
+        # single visible page, then fall back to the authoritative target id
+        # for parked or headless environments.
+        if env and env == state.get("active"):
+            owned_ids = {
+                tab.get("target_id") for entry in state.get("envs", [])
+                if entry.get("env_id") == env
+                for tab in entry.get("tabs", [])
+                if tab.get("target_id")
+            }
+            visible_pages = [page for page in pages
+                             if page.get("id") in owned_ids and self._visibility(page) == "visible"]
+            if len(visible_pages) == 1:
+                page = visible_pages[0]
+                self._target_cache[env] = (time.time(), page["id"])
+                return page
+
         # Exact handle first: the browser publishes the DevTools target id per env.
         for entry in state.get("envs", []):
             if entry.get("env_id") != env:
@@ -575,13 +595,14 @@ class BrowserBackend:
       }
       if (out.length >= 240) break;
       const r = el.getBoundingClientRect();
-      if (r.width < 4 || r.height < 4) continue;
+      const fileControl = el.matches('input[type=file]') && el.isConnected;
+      if (!fileControl && (r.width < 4 || r.height < 4)) continue;
       const cs = getComputedStyle(el);
       const x = r.left + originX, y = r.top + originY;
       const clipped = {left: Math.max(0, x), top: Math.max(0, y), right: Math.min(innerWidth, x + r.width), bottom: Math.min(innerHeight, y + r.height)};
-      const rendered = cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0 &&
+      const rendered = fileControl || (cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0 &&
         r.width >= 4 && r.height >= 4 &&
-        (!el.checkVisibility || el.checkVisibility({checkOpacity:true, checkVisibilityCSS:true}));
+        (!el.checkVisibility || el.checkVisibility({checkOpacity:true, checkVisibilityCSS:true})));
       if (!rendered) continue;
       const inViewport = clipped.right > clipped.left && clipped.bottom > clipped.top;
       const cx = inViewport ? (clipped.left + clipped.right) / 2 : x + r.width / 2;
@@ -594,8 +615,9 @@ class BrowserBackend:
         options: Array.from(el.options).slice(0, 120).map(option => ({value: option.value, label: (option.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120), selected: option.selected, disabled: option.disabled}))
       } : {};
       const inputState = el.matches('input[type=checkbox],input[type=radio]') ? {checked: el.checked, value: el.value || ''} : {};
+      const fileState = el.matches('input[type=file]') ? {file_accept: el.getAttribute('accept') || '', multiple: !!el.multiple} : {};
       const menuState = {input_type: el.getAttribute('type'), aria_haspopup: el.getAttribute('aria-haspopup'), aria_expanded: el.getAttribute('aria-expanded'), aria_selected: el.getAttribute('aria-selected'), aria_current: el.getAttribute('aria-current'), aria_level: el.getAttribute('aria-level'), menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null, custom_control:customControl, control_kind:customControl ? customKind(el) : null};
-      out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (customControl ? 'combobox' : el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport:inViewport, clickable:cs.pointerEvents !== 'none', occluded: root === document && inViewport ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...menuState});
+      out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (customControl ? 'combobox' : el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport:inViewport, clickable:cs.pointerEvents !== 'none', occluded: root === document && inViewport ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...fileState, ...menuState});
     }
     if (out.length >= 240) return;
     let frames = [];
