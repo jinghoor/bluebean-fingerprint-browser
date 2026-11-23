@@ -50,6 +50,8 @@ class BrowserCdp(Cdp):
 PROFILE = PROFILE_DIR
 STATE_FILE = PROFILE / "Default" / "envs.json"
 DEVTOOLS_PORT_FILE = PROFILE / "DevToolsActivePort"
+OBSERVE_DEFAULT_LIMIT = 160
+OBSERVE_MAX_LIMIT = 240
 # Local control traffic must never inherit an Internet/system proxy.
 LOOPBACK_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -556,7 +558,7 @@ class BrowserBackend:
     return path.join(' > ');
   }
   function visit(root, framePath, shadowPath, originX, originY) {
-    if (!root || out.length >= 120) return;
+    if (!root || out.length >= 240) return;
     let nodes = [];
     try { nodes = Array.from(root.querySelectorAll(sel)); } catch (_) { return; }
     for (const el of nodes) {
@@ -571,7 +573,7 @@ class BrowserBackend:
         for (let i = 0; i < text.length; i++) fingerprint = (fingerprint * 31 + text.charCodeAt(i)) >>> 0;
         if (names.length < 40) names.push(text);
       }
-      if (out.length >= 120) break;
+      if (out.length >= 240) break;
       const r = el.getBoundingClientRect();
       if (r.width < 4 || r.height < 4) continue;
       const cs = getComputedStyle(el);
@@ -595,11 +597,11 @@ class BrowserBackend:
       const menuState = {input_type: el.getAttribute('type'), aria_haspopup: el.getAttribute('aria-haspopup'), aria_expanded: el.getAttribute('aria-expanded'), aria_selected: el.getAttribute('aria-selected'), aria_current: el.getAttribute('aria-current'), aria_level: el.getAttribute('aria-level'), menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null, custom_control:customControl, control_kind:customControl ? customKind(el) : null};
       out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (customControl ? 'combobox' : el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport:inViewport, clickable:cs.pointerEvents !== 'none', occluded: root === document && inViewport ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...menuState});
     }
-    if (out.length >= 120) return;
+    if (out.length >= 240) return;
     let frames = [];
     try { frames = Array.from(root.querySelectorAll('iframe,frame')); } catch (_) {}
     for (const frame of frames) {
-      if (out.length >= 120) break;
+      if (out.length >= 240) break;
       try {
         const child = frame.contentDocument;
         if (!child) continue;
@@ -610,7 +612,7 @@ class BrowserBackend:
     let hosts = [];
     try { hosts = Array.from(root.querySelectorAll('*')).filter(el => el.shadowRoot).slice(0, 40); } catch (_) {}
     for (const host of hosts) {
-      if (out.length >= 120) break;
+      if (out.length >= 240) break;
       try { visit(host.shadowRoot, framePath, shadowPath.concat(locator(host,root)), originX, originY); } catch (_) {}
     }
   }
@@ -619,7 +621,7 @@ class BrowserBackend:
 })()
 """
 
-    def observe(self, env: str | None, limit: int = 80) -> dict:
+    def observe(self, env: str | None, limit: int = OBSERVE_DEFAULT_LIMIT) -> dict:
         resolved_env = env or self.env_state().get("active", "")
         self.observations.pop(resolved_env,None)
         cdp = self._cdp(env)
@@ -631,7 +633,7 @@ class BrowserBackend:
             raise RuntimeError('page observation was not returned; observe again before acting')
         epoch = int(time.time() * 1000)
         observation_id = secrets.token_hex(4)
-        items = data.get('elements', [])[:max(1,min(120,limit))]
+        items = data.get('elements', [])[:max(1,min(OBSERVE_MAX_LIMIT,limit))]
         for item in items:
             item['id'] = observation_id + ':' + item['id']
         summary = data.pop('_snapshot',None)
@@ -2054,7 +2056,7 @@ new Promise(resolve => {
         # its ids immediately, while callers that prefer an explicit observe
         # still get the same stable behavior.
         try:
-            result["observation"] = self.observe(env, limit=80)
+            result["observation"] = self.observe(env, limit=OBSERVE_DEFAULT_LIMIT)
         except Exception as exc:
             result["observation_error"] = str(exc)[:160]
         return result

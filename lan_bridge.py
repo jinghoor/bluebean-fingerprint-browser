@@ -239,7 +239,7 @@ class Bridge:
                         "error": f"approval {decision}"}
         started = time.perf_counter()
         if name == "observe":
-            result = self.backend.observe(env, int(args.get("limit", 80)))
+            result = self.backend.observe(env, int(args.get("limit", 160)))
             observation = self.backend.observations.get(result.get('env',env or ''))
             summary = getattr(observation,'summary',None)
             if isinstance(summary,dict):
