@@ -496,7 +496,7 @@ class BrowserBackend:
     OBSERVE_JS = r"""
 (() => {
   const out = [], names = [], idCounts = new Map(), siblingGroups = new WeakMap();
-  const summarySelector = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=radio],[role=checkbox],[role=slider],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup],[tabindex]:not([tabindex="-1"]),[draggable=true],[ondrop],[ondragover]';
+  const summarySelector = 'a[href],button,input,select,textarea,[contenteditable="true"],[contenteditable=""],[role=button],[role=link],[role=combobox],[role=listbox],[role=option],[role=menu],[role=menuitem],[role=radio],[role=checkbox],[role=slider],[role=tree],[role=treeitem],[role=gridcell],[role=spinbutton],[aria-haspopup],[tabindex]:not([tabindex="-1"]),[draggable=true],[ondrop],[ondragover]';
   const customCandidateSelector = '[class*="select"],[class*="dropdown"],[class*="cascader"],[class*="combobox"],[class*="picker"],[class*="date"],[class*="time"],[class*="calendar"],[class*="circle-icon"],[class*="symbol-item"],[class*="ws-radio"],[class*="score"],[class*="evaluation"],[class*="nps"],[class*="geographical"],[class*="blank-mode-container"],[data-menu-item],[data-option]';
   const sel = summarySelector + ',' + customCandidateSelector + ',[onclick]';
   let count = 0, fingerprint = 0, id = 0;
@@ -580,7 +580,13 @@ class BrowserBackend:
   function visit(root, framePath, shadowPath, originX, originY) {
     if (!root || out.length >= 240) return;
     let nodes = [];
-    try { nodes = Array.from(root.querySelectorAll(sel)); } catch (_) { return; }
+    try {
+      nodes = Array.from(root.querySelectorAll(sel));
+      nodes.sort((a,b) => {
+        const priority = el => el.matches('[contenteditable="true"],[contenteditable=""],input[type=file]') ? 1 : 0;
+        return priority(b) - priority(a);
+      });
+    } catch (_) { return; }
     for (const el of nodes) {
       const rawLabel = el.getAttribute('aria-label') || el.getAttribute('name') ||
         el.getAttribute('placeholder') || el.innerText ||
@@ -617,8 +623,7 @@ class BrowserBackend:
       const inputState = el.matches('input[type=checkbox],input[type=radio]') ? {checked: el.checked, value: el.value || ''} : {};
       const fileState = el.matches('input[type=file]') ? {file_accept: el.getAttribute('accept') || '', multiple: !!el.multiple} : {};
       const menuState = {input_type: el.getAttribute('type'), aria_haspopup: el.getAttribute('aria-haspopup'), aria_expanded: el.getAttribute('aria-expanded'), aria_selected: el.getAttribute('aria-selected'), aria_current: el.getAttribute('aria-current'), aria_level: el.getAttribute('aria-level'), menu_role: el.closest('[role=menu],[role=listbox],[role=tree]')?.getAttribute('role') || null, custom_control:customControl, control_kind:customControl ? customKind(el) : null};
-      out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (customControl ? 'combobox' : el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport:inViewport, clickable:cs.pointerEvents !== 'none', occluded: root === document && inViewport ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', ...selectState, ...inputState, ...fileState, ...menuState});
-    }
+      out.push({id:'e' + (id++), tag:el.tagName.toLowerCase(), role:el.getAttribute('role') || (customControl ? 'combobox' : el.tagName === 'A' ? 'link' : el.tagName === 'BUTTON' ? 'button' : ''), name, href:(el.getAttribute('href') || '').slice(0,80), bbox:[Math.round(x),Math.round(y),Math.round(r.width),Math.round(r.height)], point:[cx,cy], in_viewport:inViewport, clickable:cs.pointerEvents !== 'none', occluded: root === document && inViewport ? !(hit === el || el.contains(hit) || (hit && hit.contains(el))) : false, disabled:el.matches(':disabled') || !!el.closest('[inert],[aria-disabled="true"]'), visual_only:false, selector:locator(el,root), frame_path:framePath, shadow_path:shadowPath, value:'value' in el ? String(el.value ?? '') : '', editable:!!el.isContentEditable, contenteditable:el.getAttribute('contenteditable'), ...selectState, ...inputState, ...fileState, ...menuState});    }
     if (out.length >= 240) return;
     let frames = [];
     try { frames = Array.from(root.querySelectorAll('iframe,frame')); } catch (_) {}

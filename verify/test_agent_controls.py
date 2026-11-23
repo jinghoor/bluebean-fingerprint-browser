@@ -21,7 +21,7 @@ PROFILE.mkdir(parents=True)
 PAGE = '''<!doctype html><input id="text" value="old"><button id="submit">提交</button>
 <input id="check" type="checkbox"><input id="range" type="range" min="0" max="100" value="10">
 <input id="file" type="file"><input id="hidden-file" type="file" accept=".png" style="display:none"><button id="drag" draggable="true">拖动</button><button id="drop">放置</button><a id="download" href="/download">下载</a>
-<div id="offscreen" style="margin-top:1800px">目标区域</div><input id="offscreen-input" style="margin-top:120px" value="old-offscreen">
+<div id="offscreen" style="margin-top:1800px">目标区域</div><input id="offscreen-input" style="margin-top:120px" value="old-offscreen"><div id="editor" class="ProseMirror" contenteditable="true" role="textbox" style="height:80px;border:1px solid #888"></div>
 <pre id="state"></pre><script>drag.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain','ok'));drop.addEventListener('dragover',e=>e.preventDefault());drop.addEventListener('drop',e=>state.textContent+='drop:yes\\n');
 for(const x of [text,check,range,file]) for(const t of ['input','change'])
   x.addEventListener(t,e=>state.textContent+=x.id+':'+t+':'+e.isTrusted+'\\n');
@@ -85,8 +85,9 @@ try:
     wait_for_target(backend, env_id)
     observed = backend.observe(env_id)
     controls = {item["selector"]: item for item in observed["elements"]}
-    assert "#text" in controls and "#check" in controls and "#range" in controls and "#file" in controls and "#hidden-file" in controls and "#drag" in controls and "#drop" in controls and "#download" in controls and "#offscreen-input" in controls
+    assert "#text" in controls and "#check" in controls and "#range" in controls and "#file" in controls and "#hidden-file" in controls and "#drag" in controls and "#drop" in controls and "#download" in controls and "#offscreen-input" in controls and "#editor" in controls
     assert controls["#hidden-file"]["file_accept"] == ".png"
+    assert controls["#editor"]["editable"] is True and controls["#editor"]["contenteditable"] == "true"
     assert controls["#offscreen-input"]["in_viewport"] is False
     report["checks"].append("observe_finds_editable_check_range_file_controls")
 
@@ -118,9 +119,11 @@ try:
     assert scrolled["ok"] and scrolled["point"][1] > 0
     offscreen_typed = backend.type_text(env_id, controls["#offscreen-input"]["id"], "visible", replace=True)
     assert offscreen_typed["typed"] == "visible"
+    editor_typed = backend.type_text(env_id, controls["#editor"]["id"], "富文本描述", replace=True)
+    assert editor_typed["typed"] == "富文本描述"
     state = json.loads(backend._cdp(env_id).evaluate(
-        "JSON.stringify({text:text.value,checked:check.checked,range:range.value,files:file.files.length,top:offscreen.getBoundingClientRect().top,offscreenInput:document.querySelector('#offscreen-input').value})"))
-    assert state["text"] == "x" and state["checked"] and state["range"] == "75" and state["files"] == 1 and state["offscreenInput"] == "visible"
+        "JSON.stringify({text:text.value,checked:check.checked,range:range.value,files:file.files.length,top:offscreen.getBoundingClientRect().top,offscreenInput:document.querySelector('#offscreen-input').value,editor:editor.innerText})"))
+    assert state["text"] == "x" and state["checked"] and state["range"] == "75" and state["files"] == 1 and state["offscreenInput"] == "visible" and state["editor"] == "富文本描述"
     report["checks"].append("file_upload_selector_scroll_drag_and_download_complete")
     report["passed"] = True
 finally:
